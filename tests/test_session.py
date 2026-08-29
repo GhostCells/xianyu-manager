@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from xianyu_manager.database import Database
 from xianyu_manager.session import (
     BrowserSessionManager,
@@ -140,15 +142,26 @@ def test_start_login_reopens_after_visible_browser_was_closed(tmp_path):
     assert fresh_page.url == "https://www.goofish.com/im"
 
 
-def test_profile_directory_is_scoped_by_browser(tmp_path):
+@pytest.mark.parametrize(
+    ("browser_path", "browser_name"),
+    [
+        (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", "msedge"),
+        (r"C:\Program Files\Google\Chrome\Application\chrome.exe", "chrome"),
+        ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "google chrome"),
+        ("/Applications/Chromium.app/Contents/MacOS/Chromium", "chromium"),
+        ("/usr/bin/google-chrome", "google-chrome"),
+        ("/usr/bin/chromium", "chromium"),
+    ],
+)
+def test_profile_directory_is_scoped_by_browser(tmp_path, browser_path, browser_name):
     database = Database(tmp_path / "manager.db")
     manager = BrowserSessionManager(
         tmp_path / "profiles",
-        Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+        Path(browser_path),
         database,
     )
 
-    assert manager.profile_dir(2) == tmp_path / "profiles" / "msedge" / "account-2"
+    assert manager.profile_dir(2) == tmp_path / "profiles" / browser_name / "account-2"
 
 
 def test_normalize_listing_url_keeps_only_item_id():

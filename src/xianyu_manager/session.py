@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -203,7 +203,11 @@ class BrowserSessionManager:
                 self._detail_lock.release()
 
     def profile_dir(self, account_id: int) -> Path:
-        browser_name = self.browser_executable.stem.lower() if self.browser_executable else "chromium"
+        browser_name = (
+            PureWindowsPath(str(self.browser_executable)).stem.lower()
+            if self.browser_executable
+            else "chromium"
+        )
         return self.profiles_dir / browser_name / f"account-{account_id}"
 
     async def _launch_visible_browser(self, account_id: int) -> None:
