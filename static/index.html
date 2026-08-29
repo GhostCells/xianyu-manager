@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>七月账号商品与发货</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260806-visible-chrome" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">WINDOWS 本地版 · 单账号</p>
+        <h1>七月账号商品与发货</h1>
+        <p class="subtitle">只管理一个闲鱼账号；商品文件、网盘地址和订单映射均保存在本机。</p>
+      </div>
+      <div class="header-actions">
+        <div class="account-chip"><span></span><div><small>唯一账号</small><strong id="accountName">七月账号</strong></div></div>
+        <button id="scanButton" class="secondary">同步本地与闲鱼</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="dashboard-grid">
+        <section id="sessionPanel" class="status-panel" aria-live="polite">
+          <div class="status-heading"><span id="sessionDot" class="status-dot"></span><div><small>账号连接</small><h2 id="sessionTitle">正在读取…</h2></div></div>
+          <p id="sessionMessage">登录信息只保存在本机专用浏览器目录。</p>
+          <p id="sessionMeta" class="status-meta"></p>
+          <div class="panel-actions">
+            <button id="startBinding" class="primary" type="button">登录七月账号</button>
+            <button id="confirmBinding" class="primary" type="button" hidden>绑定并保持窗口</button>
+            <button id="syncBinding" class="secondary" type="button" hidden>同步当前会话</button>
+            <button id="cancelBinding" class="secondary" type="button" hidden>取消</button>
+          </div>
+        </section>
+
+        <section id="deliveryPanel" class="status-panel" aria-live="polite" data-status="disabled">
+          <div class="status-heading"><span class="delivery-dot status-dot"></span><div><small>订单监听</small><h2 id="deliveryTitle">正在读取…</h2></div></div>
+          <p id="deliveryMessage">只处理明确的已付款订单，不回复普通聊天。</p>
+          <p id="deliveryMeta" class="status-meta"></p>
+          <div class="delivery-options">
+            <label class="check"><input id="autoConfirmPlatform" type="checkbox" checked /> 发送后确认平台发货</label>
+            <label class="check"><input id="autoFreeGroup" type="checkbox" checked /> 待刀成时自动免拼</label>
+          </div>
+          <div class="panel-actions">
+            <button id="probeDelivery" class="secondary" type="button">连接自检</button>
+            <button id="startDelivery" class="primary" type="button">开启自动发货</button>
+            <button id="stopDelivery" class="secondary" type="button" hidden>停止监听</button>
+          </div>
+        </section>
+      </section>
+
+      <section id="autoReplyPanel" class="auto-reply-panel" data-status="disabled" aria-live="polite">
+        <div class="auto-reply-heading">
+          <div class="status-heading"><span class="auto-reply-dot status-dot"></span><div><small>AI 售前客服</small><h2 id="autoReplyTitle">正在读取…</h2></div></div>
+          <label class="switch-line"><input id="autoReplyEnabled" type="checkbox" /> 启用自动回复</label>
+        </div>
+        <p id="autoReplyMessage">仅处理已映射商品的买家普通文本；系统卡片和高风险问题不会自动回复。</p>
+        <p id="autoReplyMeta" class="status-meta"></p>
+        <p class="privacy-notice">隐私提示：启用后，买家文本和从《发布文案》读取、脱敏后的对应商品资料会通过硅基流动发送给 DeepSeek；网盘地址、提取码、Cookie 和密钥不会进入模型。问题含糊时会先追问一句，资料仍不足时只跳过当前问题，不会锁定后续消息；对话记录保存在本机 SQLite。</p>
+
+        <form id="autoReplyForm" class="auto-reply-form">
+          <div class="auto-reply-fields">
+            <label>回复模型
+              <select id="autoReplyModel">
+                <option value="deepseek-ai/DeepSeek-V4-Flash">DeepSeek V4 Flash（硅基流动，推荐）</option>
+                <option value="deepseek-ai/DeepSeek-V4-Pro">DeepSeek V4 Pro（硅基流动）</option>
+              </select>
+            </label>
+            <label>硅基流动 API Key
+              <input id="autoReplyApiKey" type="password" autocomplete="off" placeholder="sk-..." />
+            </label>
+            <label>最短延迟（秒）<input id="autoReplyMinDelay" type="number" min="2" max="120" value="5" /></label>
+            <label>最长延迟（秒）<input id="autoReplyMaxDelay" type="number" min="2" max="180" value="12" /></label>
+            <label>回复字数上限<input id="autoReplyMaxChars" type="number" min="40" max="300" value="180" /></label>
+            <label>人工接管时长（小时）<input id="autoReplyManualHours" type="number" min="1" max="168" value="12" /></label>
+          </div>
+          <label>客服规则
+            <textarea id="autoReplyPrompt" rows="4" maxlength="3000"></textarea>
+          </label>
+          <details class="advanced-settings">
+            <summary>高级设置</summary>
+            <label>硅基流动接口地址<input id="autoReplyBaseUrl" type="url" value="https://api.siliconflow.cn/v1" /></label>
+          </details>
+          <div class="reply-test-row">
+            <select id="autoReplyTestProduct" aria-label="测试商品"></select>
+            <input id="autoReplyTestMessage" maxlength="500" value="你好，请问这个商品适合新手吗？" aria-label="测试买家消息" />
+            <button id="testAutoReply" class="secondary" type="button">测试生成</button>
+            <button class="primary" type="submit">保存设置</button>
+          </div>
+          <p id="autoReplyNotice" class="action-notice" role="status" hidden></p>
+        </form>
+
+        <div class="reply-records-heading"><h3>最近自动回复记录</h3><span>高风险、失败和人工接管都会保留原因</span></div>
+        <div id="autoReplyRecords" class="reply-records"><p class="empty">暂无回复记录。</p></div>
+      </section>
+
+      <section id="safetyPanel" class="safety-panel" data-status="normal" aria-live="polite">
+        <div class="auto-reply-heading">
+          <div class="status-heading"><span class="safety-dot status-dot"></span><div><small>无人值守保护</small><h2 id="safetyTitle">正在读取…</h2></div></div>
+          <button id="resetCircuit" class="secondary" type="button" hidden>确认后解除熔断</button>
+        </div>
+        <p id="safetyMessage">限制自动发送频率；平台异常时先暂停，避免连续重试。</p>
+        <p id="safetyMeta" class="status-meta"></p>
+        <p id="startupReport" class="privacy-notice">正在读取最近一次启动检查。</p>
+        <form id="safetyForm" class="safety-form">
+          <div class="safety-fields">
+            <label>每小时自动回复<input id="maxRepliesHour" type="number" min="1" max="120" value="20" /></label>
+            <label>每日自动回复<input id="maxRepliesDay" type="number" min="1" max="1000" value="100" /></label>
+            <label>每小时自动发货<input id="maxDeliveriesHour" type="number" min="1" max="100" value="15" /></label>
+            <label>发送最小间隔（秒）<input id="minOutboundInterval" type="number" min="2" max="120" value="5" /></label>
+            <label>风控冷却（分钟）<input id="riskCooldownMinutes" type="number" min="5" max="180" value="30" /></label>
+            <label class="check"><input id="notificationsEnabled" type="checkbox" checked /> Windows 状态提醒</label>
+          </div>
+          <div class="panel-actions"><button class="primary" type="submit">保存安全设置</button></div>
+          <p id="safetyNotice" class="action-notice" role="status" hidden></p>
+        </form>
+      </section>
+
+      <section id="summary" class="summary" aria-label="商品概览"></section>
+
+      <section class="workspace">
+        <div class="section-heading">
+          <div><p class="eyebrow">PRODUCTS</p><h2>商品管理</h2><p>默认只看七月账号正在管理的商品；商品库旧品不会混进来。</p></div>
+          <div class="toolbar">
+            <input id="searchInput" type="search" placeholder="搜索商品名或标题" />
+            <select id="statusFilter">
+              <option value="live">全部管理商品</option>
+              <option value="delivery_ready">可以自动发货</option>
+              <option value="needs_link">缺少网盘地址</option>
+              <option value="needs_mapping">缺少本地商品映射</option>
+              <option value="library">查看全部商品库</option>
+            </select>
+          </div>
+        </div>
+        <p id="actionNotice" class="action-notice" role="status" hidden></p>
+        <section id="productList" class="product-list" aria-live="polite"></section>
+      </section>
+
+      <section class="orders-panel">
+        <div class="orders-heading"><div><p class="eyebrow">DELIVERY</p><h2>最近发货记录</h2></div><span>订单号仅显示末 6 位</span></div>
+        <div id="orderList" class="order-list"><p class="empty">暂无订单记录。</p></div>
+      </section>
+    </main>
+
+    <dialog id="editDialog">
+      <form id="editForm" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">商品配置</p><h2 id="dialogTitle"></h2></div><button type="button" class="icon-button" id="closeDialog" aria-label="关闭">×</button></div>
+        <input type="hidden" id="editDirName" />
+        <label class="check account-enable"><input id="enabledForAccount" type="checkbox" /> 加入七月账号的日常管理</label>
+        <p id="legacyNotice" class="notice" hidden>这是历史归档商品，只保留在商品库中，不能重新加入当前账号。</p>
+        <label>百度网盘地址<input id="shareUrl" type="url" placeholder="https://pan.baidu.com/s/..." /></label>
+        <label>提取码<input id="shareCode" maxlength="16" placeholder="没有提取码可留空" /></label>
+        <label class="check"><input id="shareVerified" type="checkbox" /> 已打开并确认网盘地址可用</label>
+        <section class="knowledge-editor" aria-labelledby="knowledgeEditorTitle">
+          <div class="knowledge-editor-heading">
+            <div><strong id="knowledgeEditorTitle">自动回复资料库</strong><small id="knowledgeStatus">尚未载入资料</small></div>
+            <span class="knowledge-tag">与发货目录独立</span>
+          </div>
+          <label>本地资料文件夹
+            <input id="knowledgeFolderPath" placeholder="可粘贴完整目录，或点击选择文件夹" />
+          </label>
+          <div class="knowledge-actions">
+            <button type="button" class="secondary" id="pickKnowledgeFolder">选择文件夹</button>
+            <button type="button" class="primary" id="loadKnowledgeFolder">载入/更新资料</button>
+            <button type="button" class="quiet-button" id="clearKnowledgeFolder">清除自选资料</button>
+          </div>
+          <p class="knowledge-hint">读取 TXT、Markdown、CSV、JSON、YAML、HTML 和 PDF；会递归扫描并移除链接、提取码、联系方式与密钥。自动回复开启时，整理后的资料会发送给当前大模型，请不要选择含账号密码或私人文件的目录。</p>
+        </section>
+        <div class="two-columns">
+          <label>建议价格（元）<input id="suggestedPrice" type="number" min="0" step="0.01" /></label>
+          <label>实际售价（元）<input id="confirmedPrice" type="number" min="0" step="0.01" /></label>
+        </div>
+        <label>闲鱼商品地址<input id="listingUrl" type="url" placeholder="发布后粘贴" /></label>
+        <label>商品状态<select id="listingStatus"><option value="draft">草稿</option><option value="ready">待上架</option><option value="published">已上架</option><option value="paused">已暂停</option></select></label>
+        <p id="formError" class="error" role="alert"></p>
+        <div class="dialog-actions"><button type="button" class="secondary" id="cancelEdit">取消</button><button type="submit" class="primary">保存配置</button></div>
+      </form>
+    </dialog>
+
+    <script src="/static/app.js?v=20260815-knowledge-folder-b" defer></script>
+  </body>
+</html>

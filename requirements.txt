@@ -1,0 +1,10 @@
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
+pydantic>=2.11,<3
+Pillow>=11,<13
+httpx>=0.28,<1
+playwright>=1.58,<2
+msgpack>=1.0,<2
+websockets>=13,<14
+pytest>=8,<10
+pypdf>=5,<7

@@ -1,0 +1,44 @@
+# macOS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Test and coverage output
+.pytest_cache/
+.pytest-tmp-*/
+.coverage
+htmlcov/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.dpapi
+
+# Runtime state. Production copies stay on Windows until the cloud migration.
+/data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+*.lock
+*.pid
+
+# Browser/session material must never enter source control.
+**/browser-profiles/
+**/browser_profiles/
+**/storage_state*.json
+
+# Read-only third-party research clones have their own repositories.
+/research/github/

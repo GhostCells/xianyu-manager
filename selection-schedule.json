@@ -1,0 +1,18 @@
+{
+  "keywords": [
+    "skill",
+    "AI工具",
+    "Python自动化",
+    "ComfyUI",
+    "Agent"
+  ],
+  "detail_limit_per_keyword": 10,
+  "detail_interval_seconds": 8,
+  "tracking_min_interval_hours": 20,
+  "tracking_timezone": "Asia/Shanghai",
+  "keyword_interval_seconds": 30,
+  "daily_times": [
+    "09:30"
+  ],
+  "poll_seconds": 30
+}
