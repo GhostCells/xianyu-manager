@@ -326,6 +326,16 @@ def health() -> dict[str, object]:
     }
 
 
+@app.get("/api/operation/selection-candidates")
+def operation_selection_candidates(limit: int = 50) -> dict[str, object]:
+    items = database.list_operation_candidates(limit=limit)
+    return {
+        "schema_version": "selection-candidates-v1",
+        "count": len(items),
+        "items": items,
+    }
+
+
 @app.get("/api/accounts")
 def accounts() -> list[dict[str, object]]:
     return database.list_accounts()

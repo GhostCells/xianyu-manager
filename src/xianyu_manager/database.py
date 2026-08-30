@@ -18,6 +18,16 @@ SELECTION_CANDIDATE_STATUSES = {
     "converted",
 }
 
+SELECTION_PIPELINE_STATUSES = {
+    "new_discovery",
+    "observing",
+    "hot_candidate",
+    "reviewed",
+    "rejected",
+    "production",
+    "stopped",
+}
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS products (
@@ -412,6 +422,36 @@ CREATE TABLE IF NOT EXISTS selection_scores (
 
 CREATE INDEX IF NOT EXISTS idx_selection_scores_version_total
 ON selection_scores(score_version, total_score DESC);
+
+CREATE TABLE IF NOT EXISTS selection_item_trends (
+    snapshot_id INTEGER PRIMARY KEY REFERENCES selection_item_snapshots(snapshot_id),
+    previous_snapshot_id INTEGER REFERENCES selection_item_snapshots(snapshot_id),
+    interval_hours REAL,
+    browse_delta INTEGER,
+    want_delta INTEGER,
+    collect_delta INTEGER,
+    browse_per_hour REAL,
+    want_per_hour REAL,
+    collect_per_hour REAL,
+    anomaly_codes_json TEXT NOT NULL DEFAULT '[]',
+    calculated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS selection_candidate_assessments (
+    item_id TEXT PRIMARY KEY REFERENCES selection_items(item_id),
+    snapshot_id INTEGER NOT NULL REFERENCES selection_item_snapshots(snapshot_id),
+    score_version TEXT NOT NULL,
+    total_score REAL,
+    trend_score REAL,
+    current_score REAL,
+    reason_codes_json TEXT NOT NULL DEFAULT '[]',
+    explanation_json TEXT NOT NULL DEFAULT '{}',
+    assessed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (total_score IS NULL OR total_score BETWEEN 0 AND 100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_selection_candidate_assessments_score
+ON selection_candidate_assessments(total_score DESC, assessed_at DESC);
 """
 
 
@@ -450,6 +490,7 @@ class Database:
             self._ensure_account_listings_source_column(connection)
             self._ensure_selection_item_context_columns(connection)
             self._ensure_selection_review_columns(connection)
+            self._ensure_selection_pipeline_columns(connection)
             self._backfill_selection_tracking(connection)
             self._migrate_auto_reply_to_siliconflow(connection)
 
@@ -821,6 +862,168 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_selection_successful_snapshots(self, item_id: str) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM selection_item_snapshots
+                WHERE item_id=? AND detail_status='success'
+                ORDER BY COALESCE(detail_observed_at, observed_at), snapshot_id
+                """,
+                (item_id.strip(),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_selection_trend(self, trend: dict[str, object]) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO selection_item_trends (
+                    snapshot_id, previous_snapshot_id, interval_hours,
+                    browse_delta, want_delta, collect_delta,
+                    browse_per_hour, want_per_hour, collect_per_hour,
+                    anomaly_codes_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(snapshot_id) DO UPDATE SET
+                    previous_snapshot_id=excluded.previous_snapshot_id,
+                    interval_hours=excluded.interval_hours,
+                    browse_delta=excluded.browse_delta,
+                    want_delta=excluded.want_delta,
+                    collect_delta=excluded.collect_delta,
+                    browse_per_hour=excluded.browse_per_hour,
+                    want_per_hour=excluded.want_per_hour,
+                    collect_per_hour=excluded.collect_per_hour,
+                    anomaly_codes_json=excluded.anomaly_codes_json,
+                    calculated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    trend["snapshot_id"], trend.get("previous_snapshot_id"),
+                    trend.get("interval_hours"), trend.get("browse_delta"),
+                    trend.get("want_delta"), trend.get("collect_delta"),
+                    trend.get("browse_per_hour"), trend.get("want_per_hour"),
+                    trend.get("collect_per_hour"),
+                    json.dumps(trend.get("anomaly_codes", []), ensure_ascii=False),
+                ),
+            )
+
+    def save_selection_candidate_assessment(self, assessment: dict[str, object]) -> None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT INTO selection_candidate_assessments (
+                    item_id, snapshot_id, score_version, total_score,
+                    trend_score, current_score, reason_codes_json, explanation_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(item_id) DO UPDATE SET
+                    snapshot_id=excluded.snapshot_id,
+                    score_version=excluded.score_version,
+                    total_score=excluded.total_score,
+                    trend_score=excluded.trend_score,
+                    current_score=excluded.current_score,
+                    reason_codes_json=excluded.reason_codes_json,
+                    explanation_json=excluded.explanation_json,
+                    assessed_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    assessment["item_id"], assessment["snapshot_id"],
+                    assessment["score_version"], assessment.get("total_score"),
+                    assessment.get("trend_score"), assessment.get("current_score"),
+                    json.dumps(assessment.get("reason_codes", []), ensure_ascii=False),
+                    json.dumps(assessment.get("explanation", {}), ensure_ascii=False),
+                ),
+            )
+            score = assessment.get("total_score")
+            if score is not None:
+                connection.execute(
+                    """
+                    UPDATE selection_items
+                    SET pipeline_status=CASE
+                          WHEN pipeline_status IN ('reviewed','rejected','production','stopped')
+                            THEN pipeline_status
+                          WHEN ? >= 60 THEN 'hot_candidate'
+                          ELSE 'observing'
+                        END,
+                        pipeline_status_updated_at=CURRENT_TIMESTAMP,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE item_id=?
+                    """,
+                    (float(score), assessment["item_id"]),
+                )
+
+    def list_operation_candidates(self, *, limit: int = 50) -> list[dict[str, object]]:
+        bounded_limit = max(1, min(int(limit), 200))
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT i.item_id, i.title_raw AS title, i.canonical_url AS url,
+                       i.first_seen_at, i.last_seen_at, i.pipeline_status,
+                       i.candidate_status AS review_status,
+                       s.price_cents, s.browse_count, s.want_count, s.collect_count,
+                       s.detail_observed_at AS last_observed_at,
+                       t.interval_hours, t.browse_delta, t.want_delta, t.collect_delta,
+                       t.browse_per_hour, t.want_per_hour, t.collect_per_hour,
+                       t.anomaly_codes_json,
+                       a.total_score, a.trend_score, a.current_score,
+                       a.reason_codes_json, a.explanation_json,
+                       (SELECT json_group_array(keyword) FROM (
+                          SELECT DISTINCT keyword
+                          FROM selection_search_item_observations o
+                          WHERE o.item_id=i.item_id ORDER BY keyword
+                       )) AS source_keywords_json
+                FROM selection_items i
+                JOIN selection_candidate_assessments a ON a.item_id=i.item_id
+                JOIN selection_item_snapshots s ON s.snapshot_id=a.snapshot_id
+                LEFT JOIN selection_item_trends t ON t.snapshot_id=s.snapshot_id
+                WHERE i.pipeline_status='hot_candidate'
+                ORDER BY a.total_score DESC, i.last_seen_at DESC
+                LIMIT ?
+                """,
+                (bounded_limit,),
+            ).fetchall()
+        output = []
+        for raw in rows:
+            row = dict(raw)
+            for key in ("anomaly_codes_json", "reason_codes_json", "source_keywords_json"):
+                row[key.removesuffix("_json")] = json.loads(str(row.pop(key) or "[]"))
+            row["explanation"] = json.loads(str(row.pop("explanation_json") or "{}"))
+            output.append(row)
+        return output
+
+    def set_selection_pipeline_status(self, item_id: str, new_status: str) -> dict[str, object]:
+        if new_status not in SELECTION_PIPELINE_STATUSES:
+            raise ValueError("候选阶段无效")
+        transitions = {
+            "new_discovery": {"observing", "stopped"},
+            "observing": {"hot_candidate", "rejected", "stopped"},
+            "hot_candidate": {"reviewed", "rejected", "stopped"},
+            "reviewed": {"hot_candidate", "rejected", "production", "stopped"},
+            "rejected": {"observing", "stopped"},
+            "production": {"stopped"},
+            "stopped": {"observing"},
+        }
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT pipeline_status FROM selection_items WHERE item_id=?", (item_id.strip(),)
+            ).fetchone()
+            if row is None:
+                raise ValueError("候选商品不存在")
+            previous = str(row["pipeline_status"])
+            if new_status not in transitions[previous]:
+                raise ValueError(f"候选阶段不能从 {previous} 转为 {new_status}")
+            connection.execute(
+                """
+                UPDATE selection_items SET pipeline_status=?,
+                    pipeline_status_updated_at=CURRENT_TIMESTAMP,
+                    updated_at=CURRENT_TIMESTAMP WHERE item_id=?
+                """,
+                (new_status, item_id.strip()),
+            )
+            updated = connection.execute(
+                "SELECT * FROM selection_items WHERE item_id=?", (item_id.strip(),)
+            ).fetchone()
+        return dict(updated)
+
     def list_selection_detail_candidates(
         self,
         run_id: str,
@@ -1061,6 +1264,17 @@ class Database:
                     """,
                     (item_id,),
                 )
+                connection.execute(
+                    """
+                    UPDATE selection_items
+                    SET pipeline_status=CASE WHEN pipeline_status='new_discovery'
+                                             THEN 'observing' ELSE pipeline_status END,
+                        pipeline_status_updated_at=CURRENT_TIMESTAMP,
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE item_id=?
+                    """,
+                    (item_id,),
+                )
             row = connection.execute(
                 """
                 SELECT * FROM selection_item_snapshots
@@ -1068,7 +1282,12 @@ class Database:
                 """,
                 (run_id, item_id, keyword),
             ).fetchone()
-        return dict(row) if row is not None else {}
+        saved = dict(row) if row is not None else {}
+        if detail_status == "success":
+            from .selection_hot_candidates import refresh_item_assessment
+
+            refresh_item_assessment(self, item_id)
+        return saved
 
     def fail_selection_search_run(
         self,
@@ -1172,6 +1391,22 @@ class Database:
             "candidate_status": "TEXT NOT NULL DEFAULT 'unreviewed'",
             "candidate_status_updated_at": "TEXT",
             "last_review_id": "INTEGER",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                connection.execute(
+                    f"ALTER TABLE selection_items ADD COLUMN {name} {declaration}"
+                )
+
+    @staticmethod
+    def _ensure_selection_pipeline_columns(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(selection_items)").fetchall()
+        }
+        additions = {
+            "pipeline_status": "TEXT NOT NULL DEFAULT 'new_discovery'",
+            "pipeline_status_updated_at": "TEXT",
         }
         for name, declaration in additions.items():
             if name not in columns:

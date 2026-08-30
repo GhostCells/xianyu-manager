@@ -99,3 +99,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start.ps1
 - 管理数据库：`D:\Projects\副业\闲鱼\xianyu-manager\data\manager.db`
 - 硅基流动 Key：`D:\Projects\副业\闲鱼\xianyu-manager\data\siliconflow-api-key.dpapi`（Windows 当前用户加密）
 - 百度网盘：由官方客户端备份至 `全部文件/我的资源/闲鱼/商品库`
+
+## 自动爆品候选数据出口
+
+选品链路会按 `item_id` 保存搜索命中、详情快照和跨批次趋势。具有至少两次可比较成功快照的商品会生成可解释评估；达到 MVP 阈值后进入独立的 `hot_candidate` 候选阶段，不会自动改变人工审核结论，也不会自动进入商品生产。
+
+Operation 可通过本机只读接口 `GET /api/operation/selection-candidates?limit=50` 获取当前候选。响应版本为 `selection-candidates-v1`，包含商品基本信息、来源关键词、最新互动值、快照差分、单位小时增速、评分拆分、候选原因、自动候选阶段和人工审核状态。缺失的发布时间、商品年龄或互动字段保持 `null`，不会补成 `0`。

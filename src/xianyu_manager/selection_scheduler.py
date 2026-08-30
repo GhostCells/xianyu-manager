@@ -226,10 +226,12 @@ async def run_collection_cycle(
             keyword_result["status"] = "success"
         except SelectionCollectionError as exc:
             keyword_result["error"] = {"code": exc.code, "message": str(exc)}
-            keyword_result["status"] = (
-                "verification_required"
-                if exc.code == "VERIFICATION_REQUIRED"
-                else "stopped"
+            blocking_codes = {
+                "VERIFICATION_REQUIRED", "LOGIN_REQUIRED",
+                "BROWSER_NOT_RUNNING", "SELECTION_BUSY",
+            }
+            keyword_result["status"] = "verification_required" if exc.code == "VERIFICATION_REQUIRED" else (
+                "stopped" if exc.code in blocking_codes else "failed"
             )
             _log_event(logger, "collection_stopped", cycle_id=cycle_id, keyword=keyword, code=exc.code, message=str(exc))
             summary["results"].append(keyword_result)
@@ -242,8 +244,13 @@ async def run_collection_cycle(
                     current_index=index,
                     code=exc.code,
                 )
-            else:
+            elif exc.code in blocking_codes:
                 summary["status"] = "stopped"
+            else:
+                summary["status"] = "partial"
+                if index < len(config.keywords) - 1:
+                    await asyncio.sleep(config.keyword_interval_seconds)
+                continue
             break
         except Exception as exc:
             keyword_result["error"] = {"code": type(exc).__name__, "message": str(exc)}
@@ -265,14 +272,17 @@ class SchedulerInstanceLock:
         self._file: Any = None
 
     def __enter__(self) -> "SchedulerInstanceLock":
-        import msvcrt
-
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.path.open("a+b")
         self._file.seek(0)
         try:
-            msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as exc:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError) as exc:
             self._file.close()
             self._file = None
             raise RuntimeError("已有选品采集调度器正在运行") from exc
@@ -281,11 +291,14 @@ class SchedulerInstanceLock:
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
         if self._file is None:
             return
-        import msvcrt
-
         self._file.seek(0)
         try:
-            msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
         finally:
             self._file.close()
             self._file = None

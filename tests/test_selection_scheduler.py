@@ -193,3 +193,29 @@ def test_detail_verification_marks_first_keyword_and_skips_remaining_keywords() 
         "verification_required",
         "skipped",
     ]
+
+
+def test_ordinary_keyword_failure_does_not_stop_later_keywords() -> None:
+    events = []
+
+    async def fake_search(keyword, db, *, bridge_token):
+        events.append(keyword)
+        if keyword == "bad":
+            raise SelectionCollectionError("run-bad", "VALUEERROR", "解析失败")
+        return {"run_id": f"run-{keyword}", "result_count": 1}
+
+    async def fake_batch(run_id, db, **kwargs):
+        return {"success_count": 1, "failed_count": 0, "stopped_code": None}
+
+    config = SchedulerConfig(
+        keywords=("good-1", "bad", "good-2"), detail_limit_per_keyword=1,
+        detail_interval_seconds=5, keyword_interval_seconds=0,
+        daily_times=("09:30",), poll_seconds=30,
+    )
+    result = asyncio.run(run_collection_cycle(
+        config, object(), "token", logging.getLogger("test-keyword-isolation"),
+        search_function=fake_search, batch_function=fake_batch,
+    ))
+    assert events == ["good-1", "bad", "good-2"]
+    assert result["status"] == "partial"
+    assert [row["status"] for row in result["results"]] == ["success", "failed", "success"]
