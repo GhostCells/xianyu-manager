@@ -23,7 +23,19 @@ htmlcov/
 .env.*
 !.env.example
 !.env.*.example
+!.env.template
+!.env.*.template
 *.dpapi
+
+# Credentials and private keys
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+credentials*.json
+secrets*.json
+auth-key*
 
 # Runtime state. Production copies stay on Windows until the cloud migration.
 /data/
@@ -38,7 +50,32 @@ htmlcov/
 # Browser/session material must never enter source control.
 **/browser-profiles/
 **/browser_profiles/
+**/user-data-dir/
+**/chrome-profile/
+**/chromium-profile/
+**/playwright/.auth/
+**/cookies*.json
+**/cookie*.json
+**/cookie*.txt
+**/sessions/
+**/session-data/
 **/storage_state*.json
+
+# Production, customer, and delivery assets
+*.zip
+customer/
+customers/
+deliveries/
+客户文件/
+客户交付/
+商品库/
+xianyu-prohibited-checker/
+**/xianyu-prohibited-checker/
+
+# Raw research assets excluded from the publishable repository.
+/research/2026-07-29-hand-drawn-video-prompts/
+/research/2026-07-30-ai-video-pipeline/
+/research/2026-07-30-pluvio9yte-2081580929492131947/
 
 # Read-only third-party research clones have their own repositories.
 /research/github/
