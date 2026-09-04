@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import re
+import sys
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -11,6 +12,10 @@ from playwright.async_api import async_playwright
 
 MANAGER_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = MANAGER_ROOT.parent
+sys.path.insert(0, str(MANAGER_ROOT / "src"))
+
+from xianyu_manager.profile_lock import hold_profile_lock_for_process
+
 EDGE = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 PUBLISH_URL = "https://www.goofish.com/publish"
 
@@ -64,6 +69,7 @@ async def main() -> None:
         "shipping": "无需邮寄",
     }
 
+    hold_profile_lock_for_process(profile)
     async with async_playwright() as playwright:
         context = await playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile),

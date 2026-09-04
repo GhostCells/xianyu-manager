@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from xianyu_manager.app import app, delivery_service
+from xianyu_manager import app as app_module
 
 
 def test_health_and_products():
@@ -116,3 +117,13 @@ def test_scan_keeps_local_refresh_when_remote_listing_refresh_fails(monkeypatch)
     assert payload["count"] >= 19
     assert payload["listing_sync"]["ok"] is False
     assert payload["listing_sync"]["error"] == "监听尚未连接"
+
+
+def test_linux_folder_picker_returns_explicit_unsupported_response():
+    product = app_module.database.list_products()[0]
+    safe_name = product["dir_name"]
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post(f"/api/products/{safe_name}/knowledge-folder/pick")
+
+    assert response.status_code == 501
+    assert "不支持本地 GUI 目录选择" in response.json()["detail"]

@@ -8,6 +8,7 @@ import time
 import msgpack
 
 from xianyu_manager.delivery import (
+    browser_platform_header,
     build_live_listing_snapshot,
     compose_delivery_message,
     DeliveryService,
@@ -24,6 +25,12 @@ from xianyu_manager.delivery import (
     group_event_stage,
     parse_market_timestamp,
 )
+
+
+def test_browser_platform_header_matches_runtime_platform():
+    assert browser_platform_header("Win32") == '"Windows"'
+    assert browser_platform_header("MacIntel") == '"macOS"'
+    assert browser_platform_header("Linux x86_64") == '"Linux"'
 
 
 class FakeTokenResponse:
@@ -243,6 +250,7 @@ def test_im_token_uses_browser_request_context_and_refreshes_cookies():
     service._runtime_user_agent = (
         "Mozilla/5.0 Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
     )
+    service._runtime_sec_ch_ua_platform = '"Linux"'
     request = FakeBrowserRequest()
     token, cookies = asyncio.run(
         service._fetch_im_token(
@@ -254,6 +262,7 @@ def test_im_token_uses_browser_request_context_and_refreshes_cookies():
     assert token == "token-ok"
     assert cookies["_m_h5_tk"] == "fresh_123"
     assert "cookie" not in request.headers
+    assert request.headers["sec-ch-ua-platform"] == '"Linux"'
 
 
 def test_delivery_message_contains_only_verified_delivery_fields():

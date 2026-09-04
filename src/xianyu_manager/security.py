@@ -66,7 +66,9 @@ class SecretStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def has_secret(self) -> bool:
-        return self.path.is_file() and self.path.stat().st_size > 0
+        return bool(os.environ.get("SILICONFLOW_API_KEY", "").strip()) or (
+            self.path.is_file() and self.path.stat().st_size > 0
+        )
 
     def save(self, secret: str) -> None:
         value = secret.strip()
@@ -78,7 +80,10 @@ class SecretStore:
         temporary.replace(self.path)
 
     def load(self) -> str:
-        if not self.has_secret():
+        environment_secret = os.environ.get("SILICONFLOW_API_KEY", "").strip()
+        if environment_secret:
+            return environment_secret
+        if not self.path.is_file() or self.path.stat().st_size <= 0:
             return ""
         return unprotect_secret(self.path.read_bytes()).strip()
 

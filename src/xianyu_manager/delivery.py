@@ -9,6 +9,7 @@ import random
 import re
 import secrets
 import time
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,23 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 "
     "Edg/150.0.0.0"
 )
+
+
+def browser_platform_header(platform_hint: str = "") -> str:
+    value = platform_hint.strip().lower()
+    if "win" in value:
+        platform = "Windows"
+    elif "mac" in value:
+        platform = "macOS"
+    elif "linux" in value or "x11" in value:
+        platform = "Linux"
+    elif sys.platform == "darwin":
+        platform = "macOS"
+    elif sys.platform == "win32":
+        platform = "Windows"
+    else:
+        platform = "Linux"
+    return f'"{platform}"'
 PAID_MARKERS = (
     "[我已付款，等待你发货]",
     "我已付款，等待你发货",
@@ -602,6 +620,7 @@ class DeliveryService:
         self.profiles_dir = profiles_dir
         self.browser_executable = browser_executable
         self._runtime_user_agent = USER_AGENT
+        self._runtime_sec_ch_ua_platform = browser_platform_header()
         self.database = database
         self.secret_store = secret_store
         self.reply_client = reply_client or SiliconFlowReplyClient()
@@ -1187,6 +1206,15 @@ class DeliveryService:
                     self._runtime_user_agent = detected_user_agent.strip()
             except Exception:
                 self._runtime_user_agent = USER_AGENT
+            try:
+                platform_hint = await page.evaluate(
+                    "navigator.userAgentData?.platform || navigator.platform || ''"
+                )
+                self._runtime_sec_ch_ua_platform = browser_platform_header(
+                    str(platform_hint or "")
+                )
+            except Exception:
+                self._runtime_sec_ch_ua_platform = browser_platform_header()
             cookies = await context.cookies(
                 [GOOFISH_HOME, "https://passport.goofish.com/", TOKEN_URL]
             )
@@ -1319,7 +1347,9 @@ class DeliveryService:
                     f'"{browser_brand}";v="{browser_major}"'
                 ),
                 "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
+                "sec-ch-ua-platform": getattr(
+                    self, "_runtime_sec_ch_ua_platform", browser_platform_header()
+                ),
                 "sec-fetch-dest": "empty",
                 "sec-fetch-mode": "cors",
                 "sec-fetch-site": "same-site",

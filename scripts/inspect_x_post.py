@@ -10,6 +10,10 @@ from playwright.async_api import async_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from xianyu_manager.profile_lock import hold_profile_lock_for_process
+
 EDGE = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 PROFILE = ROOT / "data" / "browser-profiles" / "msedge" / "account-2"
 POST_URL = "https://x.com/Pluvio9yte/status/2081580929492131947?s=20"
@@ -18,6 +22,7 @@ OUTPUT = ROOT / "research" / f"{date.today().isoformat()}-pluvio9yte-20815809294
 
 async def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    hold_profile_lock_for_process(PROFILE)
     async with async_playwright() as playwright:
         context = await playwright.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE),

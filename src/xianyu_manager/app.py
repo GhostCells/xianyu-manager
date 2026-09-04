@@ -37,6 +37,7 @@ session_manager = BrowserSessionManager(
     settings.browser_profiles_dir,
     settings.browser_executable,
     database,
+    browser_headless=settings.browser_headless,
 )
 delivery_service = DeliveryService(
     settings.browser_profiles_dir,
@@ -797,6 +798,11 @@ def pick_product_knowledge_folder(dir_name: str) -> dict[str, object]:
     current = database.get_product(safe_name)
     if current is None:
         raise HTTPException(status_code=404, detail="商品不存在")
+    if os.name != "nt":
+        raise HTTPException(
+            status_code=501,
+            detail="当前服务器不支持本地 GUI 目录选择；请通过已配置的服务器绝对路径加载资料",
+        )
     env = os.environ.copy()
     env["XIANYU_INITIAL_FOLDER"] = str(
         current.get("knowledge_source_path") or (settings.product_library / safe_name)

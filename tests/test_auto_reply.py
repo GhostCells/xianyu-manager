@@ -818,3 +818,29 @@ def test_secret_store_uses_windows_dpapi(tmp_path):
     store.save("sk-test-secret")
     assert store.load() == "sk-test-secret"
     assert b"sk-test-secret" not in store.path.read_bytes()
+
+
+def test_secret_store_reads_environment_without_writing(tmp_path, monkeypatch, caplog):
+    store = SecretStore(tmp_path / "siliconflow-key.dpapi")
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "environment-secret")
+
+    assert store.has_secret() is True
+    assert store.load() == "environment-secret"
+    assert not store.path.exists()
+    assert "environment-secret" not in caplog.text
+
+
+def test_secret_store_environment_has_priority_over_dpapi_file(tmp_path, monkeypatch):
+    store = SecretStore(tmp_path / "siliconflow-key.dpapi")
+    store.path.write_bytes(b"encrypted-placeholder")
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "environment-secret")
+
+    assert store.load() == "environment-secret"
+
+
+def test_secret_store_missing_key_is_explicitly_absent(tmp_path, monkeypatch):
+    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)
+    store = SecretStore(tmp_path / "siliconflow-key.dpapi")
+
+    assert store.has_secret() is False
+    assert store.load() == ""

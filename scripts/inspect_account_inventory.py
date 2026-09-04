@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from xianyu_manager.config import load_settings
 from xianyu_manager.database import Database
+from xianyu_manager.profile_lock import hold_profile_lock_for_process
 
 
 EDGE = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
@@ -55,6 +56,7 @@ def listing_price_cents(text: str) -> int | None:
 
 async def main() -> None:
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    hold_profile_lock_for_process(PROFILE)
     async with async_playwright() as playwright:
         context = await playwright.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE),

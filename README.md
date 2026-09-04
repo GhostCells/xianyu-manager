@@ -100,6 +100,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start.ps1
 - 硅基流动 Key：`D:\Projects\副业\闲鱼\xianyu-manager\data\siliconflow-api-key.dpapi`（Windows 当前用户加密）
 - 百度网盘：由官方客户端备份至 `全部文件/我的资源/闲鱼/商品库`
 
+## 跨平台运行配置
+
+Windows 未设置下列变量时继续使用原有目录和 Chrome/Edge 自动发现逻辑。Ubuntu
+生产部署应显式配置路径，并通过权限受限的 EnvironmentFile 提供密钥：
+
+- `XIANYU_MANAGER_DATA_DIR`：SQLite、浏览器 Profile 和运行状态目录；
+- `XIANYU_BROWSER_EXECUTABLE`：Chrome/Chromium 可执行文件的绝对路径；
+- `XIANYU_BROWSER_HEADLESS`：浏览器显示模式，默认 `false`；无桌面服务器需要 Xvfb；
+- `XIANYU_PRODUCT_LIBRARY_DIR`：商品库绝对路径；
+- `XIANYU_PRODUCT_VALIDATOR_PATH`：私有商品校验器绝对路径；
+- `SILICONFLOW_API_KEY`：Linux 自动回复密钥；只从进程环境读取，不写入数据库。
+
+浏览器 Profile 由主服务持有跨进程文件锁。独立发布和检查脚本检测到同一
+Profile 已被占用时会直接停止，不能与主服务并发运行。Windows 仍可使用原有
+DPAPI 密钥文件作为 `SILICONFLOW_API_KEY` 未设置时的回退。
+
 ## 自动爆品候选数据出口
 
 选品链路会按 `item_id` 保存搜索命中、详情快照和跨批次趋势。具有至少两次可比较成功快照的商品会生成可解释评估；达到 MVP 阈值后进入独立的 `hot_candidate` 候选阶段，不会自动改变人工审核结论，也不会自动进入商品生产。

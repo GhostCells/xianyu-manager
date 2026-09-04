@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .database import Database
+from .profile_lock import ProfileOwnerLock
 from .selection_bridge import (
     SelectionBridgeError,
     SelectionBusyError,
@@ -66,11 +67,14 @@ class BrowserSessionManager:
         profiles_dir: Path,
         browser_executable: Path | None,
         database: Database,
+        *,
+        browser_headless: bool = False,
     ) -> None:
         self.profiles_dir = profiles_dir
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         self.browser_executable = browser_executable
         self.database = database
+        self.browser_headless = browser_headless
         self._lock = asyncio.Lock()
         self._selection_lock = asyncio.Lock()
         self._detail_lock = asyncio.Lock()
@@ -82,6 +86,7 @@ class BrowserSessionManager:
         self._previous_status = "unbound"
         self._handoff_account_id: int | None = None
         self._handoff_storage_state: dict[str, object] | None = None
+        self._profile_lock: ProfileOwnerLock | None = None
 
     async def search_listings(
         self,
@@ -213,16 +218,37 @@ class BrowserSessionManager:
     async def _launch_visible_browser(self, account_id: int) -> None:
         from playwright.async_api import async_playwright
 
-        self._playwright = await async_playwright().start()
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.profile_dir(account_id)),
-            executable_path=str(self.browser_executable),
-            headless=False,
-            no_viewport=True,
-            args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
-        )
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        self._account_id = account_id
+        profile_dir = self.profile_dir(account_id)
+        profile_lock = ProfileOwnerLock(profile_dir)
+        profile_lock.acquire()
+        self._profile_lock = profile_lock
+        try:
+            self._playwright = await async_playwright().start()
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                executable_path=str(self.browser_executable),
+                headless=self.browser_headless,
+                no_viewport=True,
+                args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
+            )
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+            self._account_id = account_id
+        except Exception:
+            if self._context is not None:
+                try:
+                    await self._context.close()
+                except Exception:
+                    pass
+            if self._playwright is not None:
+                try:
+                    await self._playwright.stop()
+                except Exception:
+                    pass
+            self._context = None
+            self._playwright = None
+            profile_lock.release()
+            self._profile_lock = None
+            raise
 
     async def _context_is_alive(self) -> bool:
         """Return whether the remembered browser context still has a live browser.
@@ -460,6 +486,7 @@ class BrowserSessionManager:
             playwright: Any | None = None
             context: Any | None = None
             page: Any | None = None
+            profile_lock: ProfileOwnerLock | None = None
             shared_context = False
             try:
                 if self._context is not None:
@@ -470,11 +497,13 @@ class BrowserSessionManager:
                 else:
                     from playwright.async_api import async_playwright
 
+                    profile_lock = ProfileOwnerLock(self.profile_dir(account_id))
+                    profile_lock.acquire()
                     playwright = await async_playwright().start()
                     context = await playwright.chromium.launch_persistent_context(
                         user_data_dir=str(self.profile_dir(account_id)),
                         executable_path=str(self.browser_executable),
-                        headless=False,
+                        headless=self.browser_headless,
                         no_viewport=True,
                         args=["--start-maximized", "--no-first-run", "--no-default-browser-check"],
                     )
@@ -538,6 +567,8 @@ class BrowserSessionManager:
                         await playwright.stop()
                     except Exception:
                         pass
+                if profile_lock is not None:
+                    profile_lock.release()
 
     async def shutdown(self) -> None:
         async with self._lock:
@@ -602,3 +633,6 @@ class BrowserSessionManager:
         self._page = None
         self._playwright = None
         self._account_id = None
+        if self._profile_lock is not None:
+            self._profile_lock.release()
+            self._profile_lock = None
