@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone, tzinfo
+import math
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import sqlite3
@@ -32,13 +33,25 @@ def _tracking_timezone(name: str) -> tzinfo:
         raise ValueError(f"无效的追踪时区: {name}") from exc
 
 
-def _adaptive_targets(limit: int, new_count: int, tracking_count: int) -> tuple[int, int]:
+def _budget_targets(
+    limit: int,
+    new_count: int,
+    tracking_count: int,
+    tracking_budget_ratio: float,
+) -> tuple[int, int]:
     if new_count <= 0:
         return 0, min(limit, tracking_count)
     if tracking_count <= 0:
         return min(limit, new_count), 0
-    tracking_target = round(limit * tracking_count / (new_count + tracking_count))
-    tracking_target = max(1, min(tracking_target, limit - 1))
+    tracking_target = math.floor(limit * tracking_budget_ratio + 0.5)
+    if tracking_budget_ratio <= 0:
+        tracking_target = 0
+    elif tracking_budget_ratio >= 1:
+        tracking_target = limit
+    elif limit >= 2:
+        tracking_target = max(1, min(tracking_target, limit - 1))
+    else:
+        tracking_target = 1 if tracking_budget_ratio >= 0.5 else 0
     new_target = limit - tracking_target
     selected_new = min(new_target, new_count)
     selected_tracking = min(tracking_target, tracking_count)
@@ -58,12 +71,16 @@ def plan_detail_candidates(
     limit: int,
     min_interval_hours: float = DEFAULT_MIN_INTERVAL_HOURS,
     timezone_name: str = DEFAULT_TIMEZONE,
+    tracking_budget_ratio: float = 0.4,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     bounded_limit = max(1, min(int(limit), 20))
     default_interval = float(min_interval_hours)
     if not 1 <= default_interval <= 168:
         raise ValueError("最短重复观测间隔必须在1到168小时之间")
+    ratio = float(tracking_budget_ratio)
+    if not 0 <= ratio <= 1:
+        raise ValueError("追踪预算比例必须在0到1之间")
     local_timezone = _tracking_timezone(timezone_name)
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
@@ -82,11 +99,16 @@ def plan_detail_candidates(
             row["skip_reason"] = "current_run_success"
             skipped.append(row)
             continue
+        tracking_status = str(row.get("tracking_status") or "")
+        if tracking_status in {"paused", "retired"}:
+            row["skip_reason"] = "tracking_inactive"
+            skipped.append(row)
+            continue
         if last_success is None:
             row["candidate_kind"] = "initial"
             new_pool.append(row)
             continue
-        if str(row.get("tracking_status") or "") != "active":
+        if tracking_status != "active":
             row["skip_reason"] = "tracking_inactive"
             skipped.append(row)
             continue
@@ -113,14 +135,16 @@ def plan_detail_candidates(
     tracking_pool.sort(
         key=lambda row: (
             -int(row.get("tracking_priority") or 0),
+            -float(row.get("latest_want_per_hour") or 0),
+            -int(row.get("snapshot_count") or 0),
             -float(row.get("overdue_hours") or 0),
             int(row.get("search_rank") or 10**9),
             int(row.get("observation_id") or 0),
         )
     )
 
-    new_target, tracking_target = _adaptive_targets(
-        bounded_limit, len(new_pool), len(tracking_pool)
+    new_target, tracking_target = _budget_targets(
+        bounded_limit, len(new_pool), len(tracking_pool), ratio
     )
     selected_new = new_pool[:new_target]
     selected_tracking = tracking_pool[:tracking_target]
@@ -141,6 +165,7 @@ def plan_detail_candidates(
 
     return {
         "limit": bounded_limit,
+        "tracking_budget_ratio": ratio,
         "new_eligible_count": len(new_pool),
         "tracking_due_count": len(tracking_pool),
         "selected_new_count": sum(row["candidate_kind"] == "initial" for row in selected),

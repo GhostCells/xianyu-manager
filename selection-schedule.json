@@ -10,6 +10,7 @@
   "detail_interval_seconds": 8,
   "tracking_min_interval_hours": 20,
   "tracking_timezone": "Asia/Shanghai",
+  "tracking_budget_ratio": 0.4,
   "keyword_interval_seconds": 30,
   "daily_times": [
     "09:30"

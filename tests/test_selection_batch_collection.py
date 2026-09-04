@@ -254,7 +254,7 @@ def test_verification_stops_remaining_detail_candidates(tmp_path):
     assert result["stopped_code"] == "VERIFICATION_REQUIRED"
 
 
-def test_tracked_item_not_in_current_search_is_not_requested(tmp_path):
+def test_recent_tracked_item_not_in_current_search_respects_cooldown(tmp_path):
     database = Database(tmp_path / "manager.db")
     database.start_selection_search_run("old-run", "skill")
     database.complete_selection_search_run(
@@ -290,3 +290,56 @@ def test_tracked_item_not_in_current_search_is_not_requested(tmp_path):
 
     asyncio.run(collect())
     assert requested == ["new"]
+
+
+def test_active_tracking_item_not_in_current_search_gets_new_snapshot(tmp_path):
+    database = Database(tmp_path / "manager.db")
+    database.start_selection_search_run("day-1", "skill")
+    database.complete_selection_search_run(
+        "day-1",
+        [{"item_id": "tracked", "title": "追踪商品", "url": "https://example.test/tracked"}],
+    )
+    database.save_selection_item_snapshot(
+        "tracked", price_cents=100, price_text="1", want_count=18,
+        browse_count=100, collect_count=5,
+    )
+    with database.connect() as connection:
+        connection.execute(
+            """
+            UPDATE selection_item_snapshots
+            SET observed_at='2026-08-20 00:00:00',
+                detail_observed_at='2026-08-20 00:00:00'
+            WHERE run_id='day-1'
+            """
+        )
+    database.start_selection_search_run("day-2", "skill")
+    database.complete_selection_search_run("day-2", [])
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requested.append(body["item_id"])
+        snapshot = database.save_selection_item_snapshot(
+            body["item_id"], price_cents=100, price_text="1", want_count=31,
+            browse_count=150, collect_count=8,
+            observation_run_id=body["observation_run_id"],
+            observation_keyword=body["observation_keyword"],
+            observation_search_rank=body["observation_search_rank"],
+        )
+        return httpx.Response(200, json={"ok": True, "snapshot": snapshot})
+
+    async def collect():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await collect_selection_details_batch(
+                "day-2", database, bridge_token="token", limit=10,
+                interval_seconds=0, detail_url="http://detail.test/collect", client=client,
+            )
+
+    result = asyncio.run(collect())
+    assert requested == ["tracked"]
+    assert result["selected_tracking_count"] == 1
+    with database.connect() as connection:
+        snapshots = connection.execute(
+            "SELECT run_id, want_count FROM selection_item_snapshots WHERE item_id='tracked' ORDER BY snapshot_id"
+        ).fetchall()
+    assert [tuple(row) for row in snapshots] == [("day-1", 18), ("day-2", 31)]

@@ -5,7 +5,11 @@ import json
 import logging
 
 from xianyu_manager.selection_collection import SelectionCollectionError
-from xianyu_manager.selection_scheduler import SchedulerConfig, run_collection_cycle
+from xianyu_manager.selection_scheduler import (
+    SchedulerConfig,
+    load_scheduler_config,
+    run_collection_cycle,
+)
 
 
 def test_collection_cycle_runs_search_then_details_serially() -> None:
@@ -219,3 +223,31 @@ def test_ordinary_keyword_failure_does_not_stop_later_keywords() -> None:
     assert events == ["good-1", "bad", "good-2"]
     assert result["status"] == "partial"
     assert [row["status"] for row in result["results"]] == ["success", "failed", "success"]
+
+
+def test_tracking_budget_ratio_is_configurable_and_passed_to_batch(tmp_path) -> None:
+    path = tmp_path / "schedule.json"
+    path.write_text(json.dumps({
+        "keywords": ["skill"],
+        "detail_limit_per_keyword": 10,
+        "detail_interval_seconds": 5,
+        "keyword_interval_seconds": 15,
+        "daily_times": ["09:30"],
+        "poll_seconds": 30,
+        "tracking_budget_ratio": 0.3,
+    }), encoding="utf-8")
+    config = load_scheduler_config(path)
+    assert config.tracking_budget_ratio == 0.3
+
+    async def fake_search(keyword, db, *, bridge_token):
+        return {"run_id": "run-skill", "result_count": 1}
+
+    async def fake_batch(run_id, db, **kwargs):
+        assert kwargs["tracking_budget_ratio"] == 0.3
+        return {"success_count": 1, "failed_count": 0, "stopped_code": None}
+
+    result = asyncio.run(run_collection_cycle(
+        config, object(), "token", logging.getLogger("test-budget-ratio"),
+        search_function=fake_search, batch_function=fake_batch,
+    ))
+    assert result["status"] == "ok"

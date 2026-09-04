@@ -874,6 +874,55 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_selection_tracking_diagnostics(self, item_id: str) -> dict[str, object]:
+        item = self.get_selection_item(item_id)
+        if item is None:
+            raise ValueError("候选商品不存在")
+        snapshots = self.list_selection_successful_snapshots(item_id)
+        from .selection_hot_candidates import calculate_multi_snapshot_trend
+
+        with self.connect() as connection:
+            tracking = connection.execute(
+                """
+                SELECT * FROM selection_item_tracking
+                WHERE source_platform='xianyu' AND item_id=?
+                """,
+                (item_id.strip(),),
+            ).fetchone()
+        return {
+            "item": item,
+            "tracking": dict(tracking) if tracking is not None else None,
+            "trend": calculate_multi_snapshot_trend(snapshots),
+            "snapshots": snapshots,
+        }
+
+    def update_selection_tracking_priority(
+        self,
+        item_id: str,
+        priority: int,
+        reason_codes: list[str],
+    ) -> None:
+        bounded_priority = max(-100, min(int(priority), 100))
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE selection_item_tracking
+                SET tracking_priority=?,
+                    tracking_reason_codes_json=?,
+                    tracking_source='automatic_trend',
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE source_platform='xianyu' AND item_id=?
+                  AND tracking_source IN (
+                    'automatic', 'automatic_trend', 'historical_backfill'
+                  )
+                """,
+                (
+                    bounded_priority,
+                    json.dumps(reason_codes, ensure_ascii=False),
+                    item_id.strip(),
+                ),
+            )
+
     def save_selection_trend(self, trend: dict[str, object]) -> None:
         with self.connect() as connection:
             connection.execute(
@@ -1075,37 +1124,89 @@ class Database:
                 raise ValueError("只能补采已成功完成的搜索任务")
             rows = connection.execute(
                 """
-                SELECT o.observation_id, o.run_id, o.source_platform,
-                       o.item_id, o.keyword, o.observed_at,
-                       o.search_rank, o.title_raw, o.canonical_url,
+                WITH candidates AS (
+                  SELECT o.observation_id, o.run_id, o.source_platform,
+                         o.item_id, o.keyword, o.observed_at,
+                         o.search_rank, o.title_raw, o.canonical_url,
+                         1 AS appeared_in_current_search
+                  FROM selection_search_item_observations AS o
+                  WHERE o.run_id=?
+
+                  UNION ALL
+
+                  SELECT NULL, ?, t.source_platform,
+                         i.item_id,
+                         COALESCE(i.last_search_keyword, r.keyword),
+                         i.last_seen_at,
+                         COALESCE(i.last_search_rank, 999999),
+                         i.title_raw, i.canonical_url,
+                         0 AS appeared_in_current_search
+                  FROM selection_item_tracking AS t
+                  JOIN selection_items AS i ON i.item_id=t.item_id
+                  JOIN selection_search_runs AS r ON r.run_id=?
+                  WHERE t.tracking_status='active'
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM selection_search_item_observations AS current_o
+                      WHERE current_o.run_id=?
+                        AND current_o.source_platform=t.source_platform
+                        AND current_o.item_id=t.item_id
+                    )
+                )
+                SELECT c.observation_id, c.run_id, c.source_platform,
+                       c.item_id, c.keyword, c.observed_at,
+                       c.search_rank, c.title_raw, c.canonical_url,
+                       c.appeared_in_current_search,
                        t.tracking_status, t.tracking_priority,
                        t.tracking_reason_codes_json, t.tracking_source,
                        t.min_interval_hours,
                        (
                          SELECT COALESCE(s.detail_observed_at, s.observed_at)
                          FROM selection_item_snapshots AS s
-                         WHERE s.item_id=o.item_id
+                         WHERE s.item_id=c.item_id
                            AND s.detail_status='success'
                          ORDER BY COALESCE(s.detail_observed_at, s.observed_at) DESC,
                                   s.snapshot_id DESC
                          LIMIT 1
                        ) AS last_successful_detail_at,
+                       (
+                         SELECT COUNT(*)
+                         FROM selection_item_snapshots AS counted
+                         WHERE counted.item_id=c.item_id
+                           AND counted.detail_status='success'
+                       ) AS snapshot_count,
+                       (
+                         SELECT trend.want_per_hour
+                         FROM selection_item_trends AS trend
+                         JOIN selection_item_snapshots AS trend_snapshot
+                           ON trend_snapshot.snapshot_id=trend.snapshot_id
+                         WHERE trend_snapshot.item_id=c.item_id
+                         ORDER BY COALESCE(trend_snapshot.detail_observed_at,
+                                           trend_snapshot.observed_at) DESC,
+                                  trend_snapshot.snapshot_id DESC
+                         LIMIT 1
+                       ) AS latest_want_per_hour,
                        EXISTS(
                          SELECT 1
                          FROM selection_item_snapshots AS current_snapshot
-                         WHERE current_snapshot.run_id=o.run_id
-                           AND current_snapshot.item_id=o.item_id
-                           AND current_snapshot.keyword=o.keyword
+                         WHERE current_snapshot.run_id=c.run_id
+                           AND current_snapshot.item_id=c.item_id
+                           AND current_snapshot.keyword=c.keyword
                            AND current_snapshot.detail_status='success'
                        ) AS current_run_success
-                FROM selection_search_item_observations AS o
+                FROM candidates AS c
                 LEFT JOIN selection_item_tracking AS t
-                  ON t.source_platform=o.source_platform
-                 AND t.item_id=o.item_id
-                WHERE o.run_id=?
-                ORDER BY o.search_rank ASC, o.observation_id ASC
+                  ON t.source_platform=c.source_platform
+                 AND t.item_id=c.item_id
+                ORDER BY c.appeared_in_current_search DESC,
+                         c.search_rank ASC, c.observation_id ASC
                 """,
-                (normalized_run_id,),
+                (
+                    normalized_run_id,
+                    normalized_run_id,
+                    normalized_run_id,
+                    normalized_run_id,
+                ),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1199,13 +1300,16 @@ class Database:
         collect_count: int | None,
         detail_status: str = "success",
         detail_error_code: str = "",
+        observation_run_id: str | None = None,
+        observation_keyword: str | None = None,
+        observation_search_rank: int | None = None,
     ) -> dict[str, object]:
         item = self.get_selection_item(item_id)
         if item is None:
             raise ValueError("候选商品不存在，请先执行搜索入库")
-        run_id = str(item.get("last_search_run_id") or "").strip()
-        keyword = str(item.get("last_search_keyword") or "").strip()
-        rank = item.get("last_search_rank")
+        run_id = str(observation_run_id or item.get("last_search_run_id") or "").strip()
+        keyword = str(observation_keyword or item.get("last_search_keyword") or "").strip()
+        rank = observation_search_rank if observation_search_rank is not None else item.get("last_search_rank")
         if not run_id or not keyword or not isinstance(rank, int):
             raise ValueError("候选商品缺少搜索批次上下文，请重新搜索后再补采详情")
         parse_status = "parsed" if price_cents is not None else (

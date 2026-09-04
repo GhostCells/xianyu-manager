@@ -3,7 +3,11 @@ from __future__ import annotations
 import sqlite3
 
 from xianyu_manager.database import Database
-from xianyu_manager.selection_hot_candidates import calculate_trend, refresh_item_assessment
+from xianyu_manager.selection_hot_candidates import (
+    calculate_multi_snapshot_trend,
+    calculate_trend,
+    refresh_item_assessment,
+)
 
 
 def _snapshot(snapshot_id: int, at: str, **metrics):
@@ -106,3 +110,91 @@ def test_operation_api_wrapper_is_machine_readable(monkeypatch) -> None:
         "count": 1,
         "items": [{"item_id": "1001", "total_score": 88.0}],
     }
+
+
+def test_tracking_diagnostics_exposes_multi_snapshot_trend(tmp_path) -> None:
+    database = Database(tmp_path / "manager.db")
+    database.start_selection_search_run("run-1", "skill")
+    database.complete_selection_search_run(
+        "run-1",
+        [{"item_id": "1001", "title": "商品", "url": "https://example.test/1001"}],
+    )
+    database.save_selection_item_snapshot(
+        "1001", price_cents=100, price_text="1", want_count=18,
+        browse_count=10, collect_count=1,
+    )
+    database.start_selection_search_run("run-2", "skill")
+    database.complete_selection_search_run(
+        "run-2",
+        [{"item_id": "1001", "title": "商品", "url": "https://example.test/1001"}],
+    )
+    database.save_selection_item_snapshot(
+        "1001", price_cents=100, price_text="1", want_count=31,
+        browse_count=20, collect_count=2,
+    )
+    with database.connect() as connection:
+        connection.execute(
+            "UPDATE selection_item_snapshots SET detail_observed_at='2026-09-02 00:00:00' WHERE run_id='run-1'"
+        )
+        connection.execute(
+            "UPDATE selection_item_snapshots SET detail_observed_at='2026-09-03 00:00:00' WHERE run_id='run-2'"
+        )
+
+    diagnostics = database.get_selection_tracking_diagnostics("1001")
+    assert diagnostics["trend"]["snapshot_count"] == 2
+    assert diagnostics["trend"]["latest_velocity"] == 13 / 24
+    assert [row["want_count"] for row in diagnostics["snapshots"]] == [18, 31]
+
+
+def test_multi_snapshot_trend_distinguishes_growth_and_acceleration() -> None:
+    snapshots = [
+        _snapshot(1, "2026-09-02 00:00:00", want_count=18),
+        _snapshot(2, "2026-09-03 00:00:00", want_count=31),
+        _snapshot(3, "2026-09-04 00:00:00", want_count=46),
+        _snapshot(4, "2026-09-05 00:00:00", want_count=67),
+    ]
+    trend = calculate_multi_snapshot_trend(snapshots)
+    assert trend["snapshot_count"] == 4
+    assert trend["recent_3_want_delta"] == 36
+    assert trend["recent_3_continuous_growth"] is True
+    assert trend["recent_3_avg_want_velocity"] == 36 / 48
+    assert trend["previous_velocity"] == 15 / 24
+    assert trend["latest_velocity"] == 21 / 24
+    assert trend["velocity_acceleration"] == 6 / 24
+    assert trend["want_delta_7d"] == 49
+    assert trend["avg_want_velocity_7d"] == 49 / 72
+
+    slow = calculate_multi_snapshot_trend([
+        _snapshot(1, "2026-09-02 00:00:00", want_count=300),
+        _snapshot(2, "2026-09-03 00:00:00", want_count=301),
+        _snapshot(3, "2026-09-04 00:00:00", want_count=302),
+        _snapshot(4, "2026-09-05 00:00:00", want_count=303),
+    ])
+    assert slow["recent_3_continuous_growth"] is True
+    assert slow["recent_3_avg_want_velocity"] < trend["recent_3_avg_want_velocity"]
+
+
+def test_multi_snapshot_trend_handles_insufficient_null_and_non_growth() -> None:
+    one = calculate_multi_snapshot_trend([
+        _snapshot(1, "2026-09-02 00:00:00", want_count=0)
+    ])
+    assert one["snapshot_count"] == 1
+    assert one["latest_velocity"] is None
+    assert one["recent_3_continuous_growth"] is None
+    assert "latest_velocity" in one["insufficient_data"]
+
+    falling = calculate_multi_snapshot_trend([
+        _snapshot(1, "2026-09-02 00:00:00", want_count=18),
+        _snapshot(2, "2026-09-03 00:00:00", want_count=31),
+        _snapshot(3, "2026-09-04 00:00:00", want_count=28),
+    ])
+    assert falling["recent_3_continuous_growth"] is False
+    assert falling["latest_velocity"] == -3 / 24
+
+    missing = calculate_multi_snapshot_trend([
+        _snapshot(1, "2026-09-02 00:00:00", want_count=18),
+        _snapshot(2, "2026-09-03 00:00:00", want_count=None),
+        _snapshot(3, "2026-09-04 00:00:00", want_count=28),
+    ])
+    assert missing["recent_3_want_delta"] is None
+    assert missing["recent_3_continuous_growth"] is None

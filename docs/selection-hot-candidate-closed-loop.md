@@ -16,6 +16,12 @@
 
 首次观测只记录 `first_observation`，不推断增长。相邻成功快照按详情观测时间计算间隔；间隔小于等于零时不计算速率。浏览、想要、收藏分别计算原始差值和每小时增长。任一字段缺失时，该字段差值和速率保持 `NULL`。数值下降保留负差值并记录异常代码，但不把负值用于增长评分。
 
+候选评估另从全部成功快照动态派生多次观测指标，不新增历史表或冗余计数字段：快照数、最近 3 次想要增量/平均速率/连续增长、最近 7 天想要增量/平均速率、最新与前一段速率及速率变化。证据不足时返回 `null` 并列入 `insufficient_data`。
+
+## 持续追踪与详情预算
+
+当前搜索负责发现新商品；`active` tracking 商品达到冷却时间后，即使未出现在当前搜索结果中，也会进入详情候选池。`selection-schedule.json` 的 `tracking_budget_ratio` 配置 tracking 保留预算，默认为 `0.4`；新发现和 tracking 任一池未用完的预算可由另一池借用。tracking 池优先考虑 `tracking_priority`、最新想要增速、已有成功快照数和超过冷却的时长。本阶段不自动转为 `paused` 或 `retired`。
+
 ## 评分规则
 
 `hot-candidate-mvp-v1` 只在至少有一个有效增长速率时生成总分：
@@ -33,6 +39,8 @@
 ## Operation 出口
 
 `GET /api/operation/selection-candidates?limit=50` 仅返回当前 `hot_candidate`，并按总分降序排列。同一商品不因多个关键词生成重复行，来源关键词以数组返回。
+
+`GET /api/operation/selection-tracking/{item_id}` 返回商品、tracking 状态、成功快照原始证据和上述多次观测派生指标，用于 Debug / diagnostics。
 
 ## 生产边界
 

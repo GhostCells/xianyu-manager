@@ -43,6 +43,7 @@ async def collect_selection_details_batch(
     interval_seconds: float = 5,
     tracking_min_interval_hours: float = DEFAULT_MIN_INTERVAL_HOURS,
     tracking_timezone: str = DEFAULT_TIMEZONE,
+    tracking_budget_ratio: float = 0.4,
     detail_url: str = "http://127.0.0.1:8765/api/internal/selection/detail",
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, object]:
@@ -58,6 +59,7 @@ async def collect_selection_details_batch(
         limit=bounded_limit,
         min_interval_hours=tracking_min_interval_hours,
         timezone_name=tracking_timezone,
+        tracking_budget_ratio=tracking_budget_ratio,
     )
     candidates = plan["selected"]
     owns_client = client is None
@@ -71,7 +73,12 @@ async def collect_selection_details_batch(
                 response = await http_client.post(
                     detail_url,
                     headers={"X-Internal-Token": bridge_token.strip()},
-                    json={"item_id": item_id},
+                    json={
+                        "item_id": item_id,
+                        "observation_run_id": candidate["run_id"],
+                        "observation_keyword": candidate["keyword"],
+                        "observation_search_rank": candidate["search_rank"],
+                    },
                 )
                 if response.is_error:
                     code, message = _error_detail(response)
@@ -89,6 +96,9 @@ async def collect_selection_details_batch(
                                 else "failed"
                             ),
                             detail_error_code=code,
+                            observation_run_id=str(candidate["run_id"]),
+                            observation_keyword=str(candidate["keyword"]),
+                            observation_search_rank=int(candidate["search_rank"]),
                         )
                     results.append(
                         {"item_id": item_id, "ok": False, "code": code, "message": message}
@@ -116,6 +126,9 @@ async def collect_selection_details_batch(
                     collect_count=None,
                     detail_status="failed",
                     detail_error_code=code,
+                    observation_run_id=str(candidate["run_id"]),
+                    observation_keyword=str(candidate["keyword"]),
+                    observation_search_rank=int(candidate["search_rank"]),
                 )
                 results.append(
                     {"item_id": item_id, "ok": False, "code": code, "message": str(exc)}
@@ -130,6 +143,7 @@ async def collect_selection_details_batch(
         "ok": not stopped_code,
         "run_id": normalized_run_id,
         "requested_limit": bounded_limit,
+        "tracking_budget_ratio": plan["tracking_budget_ratio"],
         "candidate_count": len(candidates),
         "new_eligible_count": plan["new_eligible_count"],
         "tracking_due_count": plan["tracking_due_count"],

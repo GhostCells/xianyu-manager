@@ -32,6 +32,7 @@ class SchedulerConfig:
     poll_seconds: int
     tracking_min_interval_hours: float = 20.0
     tracking_timezone: str = "Asia/Shanghai"
+    tracking_budget_ratio: float = 0.4
 
 
 def load_scheduler_config(path: Path) -> SchedulerConfig:
@@ -73,6 +74,9 @@ def load_scheduler_config(path: Path) -> SchedulerConfig:
     except ZoneInfoNotFoundError as exc:
         if tracking_timezone != "Asia/Shanghai":
             raise ValueError("tracking_timezone 无效") from exc
+    tracking_budget_ratio = float(raw.get("tracking_budget_ratio", 0.4))
+    if not 0 <= tracking_budget_ratio <= 1:
+        raise ValueError("tracking_budget_ratio 必须在0到1之间")
 
     return SchedulerConfig(
         keywords=keywords,
@@ -83,6 +87,7 @@ def load_scheduler_config(path: Path) -> SchedulerConfig:
         poll_seconds=poll_seconds,
         tracking_min_interval_hours=tracking_min_interval_hours,
         tracking_timezone=tracking_timezone,
+        tracking_budget_ratio=tracking_budget_ratio,
     )
 
 
@@ -183,6 +188,7 @@ async def run_collection_cycle(
                 interval_seconds=config.detail_interval_seconds,
                 tracking_min_interval_hours=config.tracking_min_interval_hours,
                 tracking_timezone=config.tracking_timezone,
+                tracking_budget_ratio=config.tracking_budget_ratio,
             )
             keyword_result["details"] = batch_result
             _log_event(

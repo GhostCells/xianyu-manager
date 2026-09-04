@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import Database
@@ -80,6 +80,125 @@ def calculate_trend(
             anomalies.append(anomaly)
     result["anomaly_codes"] = anomalies
     return result
+
+
+def _want_velocity(
+    previous: dict[str, object], current: dict[str, object]
+) -> float | None:
+    before = previous.get("want_count")
+    after = current.get("want_count")
+    before_at = _timestamp(previous.get("detail_observed_at") or previous.get("observed_at"))
+    after_at = _timestamp(current.get("detail_observed_at") or current.get("observed_at"))
+    if before is None or after is None or before_at is None or after_at is None:
+        return None
+    hours = (after_at - before_at).total_seconds() / 3600
+    if hours <= 0:
+        return None
+    return (int(after) - int(before)) / hours
+
+
+def calculate_multi_snapshot_trend(
+    snapshots: list[dict[str, object]],
+) -> dict[str, object]:
+    ordered = sorted(
+        snapshots,
+        key=lambda row: (
+            _timestamp(row.get("detail_observed_at") or row.get("observed_at"))
+            or datetime.min.replace(tzinfo=timezone.utc),
+            int(row.get("snapshot_id") or 0),
+        ),
+    )
+    result: dict[str, object] = {
+        "snapshot_count": len(ordered),
+        "recent_3_want_delta": None,
+        "recent_3_avg_want_velocity": None,
+        "recent_3_continuous_growth": None,
+        "want_delta_7d": None,
+        "avg_want_velocity_7d": None,
+        "latest_velocity": None,
+        "previous_velocity": None,
+        "velocity_acceleration": None,
+        "insufficient_data": [],
+    }
+    insufficient: list[str] = []
+    if len(ordered) >= 2:
+        result["latest_velocity"] = _want_velocity(ordered[-2], ordered[-1])
+    else:
+        insufficient.append("latest_velocity")
+
+    if len(ordered) >= 3:
+        recent = ordered[-3:]
+        previous_velocity = _want_velocity(recent[0], recent[1])
+        latest_velocity = _want_velocity(recent[1], recent[2])
+        result["previous_velocity"] = previous_velocity
+        if latest_velocity is not None:
+            result["latest_velocity"] = latest_velocity
+        if previous_velocity is not None and latest_velocity is not None:
+            result["velocity_acceleration"] = latest_velocity - previous_velocity
+        else:
+            insufficient.append("velocity_acceleration")
+        values = [row.get("want_count") for row in recent]
+        first_at = _timestamp(recent[0].get("detail_observed_at") or recent[0].get("observed_at"))
+        last_at = _timestamp(recent[-1].get("detail_observed_at") or recent[-1].get("observed_at"))
+        if all(value is not None for value in values) and first_at and last_at and last_at > first_at:
+            delta = int(values[-1]) - int(values[0])
+            result["recent_3_want_delta"] = delta
+            result["recent_3_avg_want_velocity"] = delta / ((last_at - first_at).total_seconds() / 3600)
+            result["recent_3_continuous_growth"] = all(
+                int(current) > int(previous)
+                for previous, current in zip(values, values[1:])
+            )
+        else:
+            insufficient.extend(
+                ["recent_3_want_delta", "recent_3_avg_want_velocity", "recent_3_continuous_growth"]
+            )
+    else:
+        insufficient.extend(
+            ["recent_3_want_delta", "recent_3_avg_want_velocity", "recent_3_continuous_growth",
+             "previous_velocity", "velocity_acceleration"]
+        )
+
+    latest_at = (
+        _timestamp(ordered[-1].get("detail_observed_at") or ordered[-1].get("observed_at"))
+        if ordered else None
+    )
+    if latest_at is not None:
+        window_start = latest_at - timedelta(days=7)
+        window = [
+            row for row in ordered
+            if (at := _timestamp(row.get("detail_observed_at") or row.get("observed_at")))
+            and window_start <= at <= latest_at
+            and row.get("want_count") is not None
+        ]
+        if len(window) >= 2:
+            first_at = _timestamp(window[0].get("detail_observed_at") or window[0].get("observed_at"))
+            last_at = _timestamp(window[-1].get("detail_observed_at") or window[-1].get("observed_at"))
+            if first_at and last_at and last_at > first_at:
+                delta = int(window[-1]["want_count"]) - int(window[0]["want_count"])
+                result["want_delta_7d"] = delta
+                result["avg_want_velocity_7d"] = delta / ((last_at - first_at).total_seconds() / 3600)
+            else:
+                insufficient.extend(["want_delta_7d", "avg_want_velocity_7d"])
+        else:
+            insufficient.extend(["want_delta_7d", "avg_want_velocity_7d"])
+    else:
+        insufficient.extend(["want_delta_7d", "avg_want_velocity_7d"])
+    result["insufficient_data"] = list(dict.fromkeys(insufficient))
+    return result
+
+
+def tracking_priority_from_trend(trend: dict[str, object]) -> tuple[int, list[str]]:
+    snapshot_count = int(trend.get("snapshot_count") or 0)
+    priority = min(20, snapshot_count * 5)
+    reasons = ["snapshot_history"] if snapshot_count else []
+    latest_velocity = trend.get("latest_velocity")
+    if latest_velocity is not None and float(latest_velocity) > 0:
+        priority += min(60, round(float(latest_velocity) * 20))
+        reasons.append("want_velocity_positive")
+    if trend.get("recent_3_continuous_growth") is True:
+        priority += 20
+        reasons.append("recent_3_continuous_growth")
+    return min(100, priority), reasons
 
 
 def _saturated(value: float | None, target: float) -> float | None:
@@ -170,7 +289,11 @@ def refresh_item_assessment(database: Database, item_id: str) -> dict[str, Any]:
     current = snapshots[-1]
     previous = snapshots[-2] if len(snapshots) >= 2 else None
     trend = calculate_trend(current, previous)
+    multi_snapshot_trend = calculate_multi_snapshot_trend(snapshots)
     database.save_selection_trend(trend)
     assessment = assess_item(item, current, trend)
+    assessment["explanation"]["multi_snapshot_trend"] = multi_snapshot_trend
     database.save_selection_candidate_assessment(assessment)
+    priority, priority_reasons = tracking_priority_from_trend(multi_snapshot_trend)
+    database.update_selection_tracking_priority(item_id, priority, priority_reasons)
     return assessment

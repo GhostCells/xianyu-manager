@@ -78,6 +78,49 @@ def test_mixed_pool_is_adaptive_and_neither_pool_is_starved() -> None:
     assert plan["selected_tracking_count"] != 5
 
 
+def test_configured_budget_ratio_and_unused_budget_borrowing() -> None:
+    rows = [candidate(f"new-{index}", index) for index in range(1, 9)]
+    rows += [
+        candidate(
+            f"tracked-{index}", 20 + index,
+            tracking_status="active",
+            last_successful_detail_at="2026-08-27 02:00:00",
+        )
+        for index in range(1, 9)
+    ]
+    plan = plan_detail_candidates(
+        rows, limit=10, tracking_budget_ratio=0.4, now=NOW
+    )
+    assert plan["selected_new_count"] == 6
+    assert plan["selected_tracking_count"] == 4
+
+    borrowed = plan_detail_candidates(
+        [candidate("new", 1), *rows[8:]],
+        limit=10, tracking_budget_ratio=0.4, now=NOW,
+    )
+    assert borrowed["selected_new_count"] == 1
+    assert borrowed["selected_tracking_count"] == 8
+
+
+def test_tracking_priority_then_velocity_and_snapshot_count_control_order() -> None:
+    rows = [
+        candidate(
+            "lower", 1, tracking_status="active", tracking_priority=10,
+            snapshot_count=5, latest_want_per_hour=4,
+            last_successful_detail_at="2026-08-27 02:00:00",
+        ),
+        candidate(
+            "higher", 2, tracking_status="active", tracking_priority=20,
+            snapshot_count=2, latest_want_per_hour=1,
+            last_successful_detail_at="2026-08-27 02:00:00",
+        ),
+    ]
+    plan = plan_detail_candidates(
+        rows, limit=1, tracking_budget_ratio=1, now=NOW
+    )
+    assert plan["selected"][0]["item_id"] == "higher"
+
+
 def test_not_due_and_short_cross_midnight_items_are_skipped() -> None:
     rows = [
         candidate(

@@ -196,11 +196,23 @@ class SelectionSearchRequest(BaseModel):
 class SelectionDetailRequest(BaseModel):
     item_id: str | None = Field(default=None, max_length=40)
     url: HttpUrl | None = None
+    observation_run_id: str | None = Field(default=None, max_length=64)
+    observation_keyword: str | None = Field(default=None, max_length=40)
+    observation_search_rank: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_target(self):
         if not str(self.item_id or "").strip() and self.url is None:
             raise ValueError("item_id 和 url 至少填写一个")
+        context = (
+            self.observation_run_id,
+            self.observation_keyword,
+            self.observation_search_rank,
+        )
+        if any(value is not None for value in context) and not all(
+            value is not None for value in context
+        ):
+            raise ValueError("详情观测上下文必须同时提供 run_id、keyword 和 search_rank")
         return self
 
 
@@ -292,6 +304,9 @@ async def internal_selection_detail(
             want_count=detail.get("want_count"),
             browse_count=detail.get("browse_count"),
             collect_count=detail.get("collect_count"),
+            observation_run_id=body.observation_run_id,
+            observation_keyword=body.observation_keyword,
+            observation_search_rank=body.observation_search_rank,
         )
         return {
             "ok": True,
@@ -334,6 +349,14 @@ def operation_selection_candidates(limit: int = 50) -> dict[str, object]:
         "count": len(items),
         "items": items,
     }
+
+
+@app.get("/api/operation/selection-tracking/{item_id}")
+def operation_selection_tracking(item_id: str) -> dict[str, object]:
+    try:
+        return database.get_selection_tracking_diagnostics(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/accounts")
