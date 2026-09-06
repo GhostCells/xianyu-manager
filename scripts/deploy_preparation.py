@@ -151,7 +151,8 @@ StandardError=null
         "xianyu-preparation-vnc": header
         + "Description=Temporary private preparation desktop\nRequires=xianyu-preparation-display.service\nAfter=xianyu-preparation-display.service\nPartOf=xianyu-preparation-display.service\n"
         + common
-        + f"ExecStart=/usr/bin/x11vnc -display :99 -auth {run}/Xauthority -localhost -listen 127.0.0.1 -no6 -rfbport 5901 -rfbauth {run}/vnc.auth -forever -shared -nolookup -quiet -o /dev/null\n",
+        + f"ExecStart=/usr/bin/x11vnc -display :99 -auth {run}/Xauthority -localhost -listen 127.0.0.1 -no6 -rfbport 5901 -rfbauth {run}/vnc.auth -forever -shared -nolookup -quiet -o /dev/null\n"
+        + "ExecStop=/usr/bin/x11vnc -display :99 -sync -R stop\n",
         "xianyu-preparation-web": header
         + "Description=Temporary loopback noVNC\nRequires=xianyu-preparation-vnc.service\nAfter=xianyu-preparation-vnc.service\nPartOf=xianyu-preparation-vnc.service\n"
         + common
