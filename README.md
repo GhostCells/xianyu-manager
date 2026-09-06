@@ -121,3 +121,18 @@ DPAPI 密钥文件作为 `SILICONFLOW_API_KEY` 未设置时的回退。
 选品链路会按 `item_id` 保存搜索命中、详情快照和跨批次趋势。具有至少两次可比较成功快照的商品会生成可解释评估；达到 MVP 阈值后进入独立的 `hot_candidate` 候选阶段，不会自动改变人工审核结论，也不会自动进入商品生产。
 
 Operation 可通过本机只读接口 `GET /api/operation/selection-candidates?limit=50` 获取当前候选。响应版本为 `selection-candidates-v1`，包含商品基本信息、来源关键词、最新互动值、快照差分、单位小时增速、评分拆分、候选原因、自动候选阶段和人工审核状态。缺失的发布时间、商品年龄或互动字段保持 `null`，不会补成 `0`。
+# 安全迁移演练
+
+`XIANYU_MANAGER_SAFE_MODE` 未设置或为 `false` 时保持正常单账号策略和自动化恢复行为；
+显式为 `true` 时运行真实 lifespan 和本地商品扫描，但跳过账号策略及业务恢复。
+非法值拒绝启动。配置在启动时固定，不存数据库，没有运行时关闭接口，切换必须重启。
+
+安全模式仅开放 GET/HEAD `/`、`/static/…`、`/api/health`、`/api/accounts`、
+`/api/products`。其他请求返回 403 / `SAFE_MODE_OPERATION_BLOCKED`，包括会检查登录态的
+GET `/api/session`。浏览器、发货及独立 scheduler 也在执行入口拒绝业务操作。
+health 的 `safe_mode=true`、`automation_allowed=false` 表示 API 存活，不代表生产就绪；
+没有当前账号时 `active_account=null`，不会自动创建或激活账号。
+
+演练只使用独立数据库副本。允许 schema 迁移和商品元数据同步（包括 ZIP 变化的复核标记），
+保留历史商品、已有知识正文和来源路径，不恢复账号或改写业务关联，不迁移 LLM 配置。
+不要提供真实 Cookie、Profile 或 API Key，也不要将演练副本直接提升为生产数据库。

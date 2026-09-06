@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .database import Database
+from .runtime_policy import PROCESS_POLICY
 from .selection_batch_collection import collect_selection_details_batch
 from .selection_collection import SelectionCollectionError, collect_selection_search
 
@@ -154,6 +155,7 @@ async def run_collection_cycle(
     search_function: Callable[..., Awaitable[dict[str, Any]]] = collect_selection_search,
     batch_function: Callable[..., Awaitable[dict[str, Any]]] = collect_selection_details_batch,
 ) -> dict[str, Any]:
+    PROCESS_POLICY.require_business()
     cycle_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     summary: dict[str, Any] = {
         "cycle_id": cycle_id,

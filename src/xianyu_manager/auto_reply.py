@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .knowledge import sanitize_product_knowledge
+from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
 
 
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
@@ -221,9 +222,11 @@ def normalize_decision(
 
 
 class SiliconFlowReplyClient:
-    def __init__(self, *, timeout_seconds: float = 45.0) -> None:
+    def __init__(self, *, timeout_seconds: float = 45.0, runtime_policy: RuntimePolicy = PROCESS_POLICY) -> None:
+        self.runtime_policy = runtime_policy
         self.timeout_seconds = timeout_seconds
 
+    @business_operation
     async def generate(
         self,
         *,

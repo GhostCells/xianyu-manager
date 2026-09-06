@@ -580,14 +580,14 @@ async function sessionAction(action) {
 }
 
 async function loadProducts() {
-  const [accountsResponse, productsResponse, listingsResponse] = await Promise.all([fetch("/api/accounts"), fetch("/api/products"), fetch("/api/listings")]);
+  const [accountsResponse, productsResponse, listingsResponse] = await Promise.all([fetch("/api/accounts"), fetch("/api/products"), state.safeMode ? Promise.resolve(new Response("[]")) : fetch("/api/listings")]);
   if (!accountsResponse.ok || !productsResponse.ok || !listingsResponse.ok) throw new Error("读取商品失败");
   const accounts = await accountsResponse.json();
-  state.account = accounts.find((account) => account.is_active) || accounts[0] || null;
+  state.account = accounts.find((account) => account.is_active) || (state.safeMode ? null : accounts[0]) || null;
   state.products = await productsResponse.json();
   state.listings = await listingsResponse.json();
   renderAutoReplyTestProducts();
-  el("accountName").textContent = state.account?.name || "七月账号";
+  el("accountName").textContent = state.account?.name || (state.safeMode ? "安全演练：未选定账号" : "七月账号");
   render();
 }
 
@@ -805,6 +805,20 @@ el("autoReplyRecords").addEventListener("click", (event) => {
   if (button) resumeAutoReplyChat(button.dataset.chat);
 });
 
-Promise.all([loadProducts(), loadSession(), loadDelivery(), loadAutoReply(true), loadSafety(true)]).catch((error) => {
+async function initializePage() {
+  const response = await fetch("/api/health");
+  if (!response.ok) throw new Error("读取 API 状态失败");
+  state.safeMode = (await response.json()).safe_mode === true;
+  if (state.safeMode) {
+    await loadProducts();
+    el("sessionTitle").textContent = "安全演练模式";
+    el("sessionMessage").textContent = "仅开放本地查询，业务操作被禁止；切换模式需要重启服务。";
+    document.querySelectorAll("button, input, select, textarea").forEach((node) => { node.disabled = true; });
+    return;
+  }
+  await Promise.all([loadProducts(), loadSession(), loadDelivery(), loadAutoReply(true), loadSafety(true)]);
+}
+
+initializePage().catch((error) => {
   el("productList").innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
 });

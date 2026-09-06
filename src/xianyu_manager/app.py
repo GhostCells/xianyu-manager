@@ -26,18 +26,21 @@ from .delivery import DeliveryService, listing_item_id
 from .knowledge import load_knowledge_folder
 from .scanner import scan_library
 from .security import SecretStore
+from .runtime_policy import RuntimePolicy
 from .selection_bridge import SelectionBridgeError
 from .session import BrowserSessionManager, normalize_listing_url
 
 
 settings = load_settings()
-database = Database(settings.database_path)
+runtime_policy = RuntimePolicy(settings.safe_mode)
+database = Database(settings.database_path, safe_mode=settings.safe_mode)
 secret_store = SecretStore(settings.auto_reply_secret_path)
 session_manager = BrowserSessionManager(
     settings.browser_profiles_dir,
     settings.browser_executable,
     database,
     browser_headless=settings.browser_headless,
+    runtime_policy=runtime_policy,
 )
 delivery_service = DeliveryService(
     settings.browser_profiles_dir,
@@ -45,12 +48,15 @@ delivery_service = DeliveryService(
     database,
     secret_store,
     session_manager=session_manager,
+    runtime_policy=runtime_policy,
 )
 
 
 def refresh_products() -> list[dict[str, object]]:
     scanned = scan_library(settings.product_library, settings.validator_path)
-    database.sync_products(scanned)
+    database.sync_products(scanned, safe_mode=runtime_policy.safe_mode)
+    if runtime_policy.safe_mode:
+        return database.list_products(allow_no_account=True)
     database.ensure_default_accounts()
     database.ensure_legacy_product_policy()
     account = database.enforce_single_account_mode("七月账号")
@@ -61,16 +67,22 @@ def refresh_products() -> list[dict[str, object]]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     refresh_products()
-    await delivery_service.start_if_enabled()
+    if not runtime_policy.safe_mode:
+        await delivery_service.start_if_enabled()
     try:
         yield
     finally:
-        await delivery_service.shutdown()
-        await session_manager.shutdown()
+        if not runtime_policy.safe_mode:
+            await delivery_service.shutdown()
+            await session_manager.shutdown()
 
 
 app = FastAPI(title="闲鱼本地管理系统", version="0.5.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
+
+# Explicitly reviewed local reads only. In particular /api/session is NOT a
+# read-only route: its snapshot can restore bindings and inspect cookies.
+SAFE_READ_PATHS = frozenset({"/", "/api/health", "/api/accounts", "/api/products"})
 
 
 @app.middleware("http")
@@ -79,6 +91,15 @@ async def local_request_guard(request: Request, call_next):
     host = (request.url.hostname or "").lower()
     if host not in loopback_hosts:
         return JSONResponse(status_code=403, content={"detail": "管理系统只允许本机访问"})
+
+    if runtime_policy.safe_mode and not (
+        request.method in {"GET", "HEAD"}
+        and (request.url.path in SAFE_READ_PATHS or request.url.path.startswith("/static/"))
+    ):
+        return JSONResponse(status_code=403, content={
+            "error_code": "SAFE_MODE_OPERATION_BLOCKED",
+            "detail": runtime_policy.error_message,
+        })
 
     if request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
         origin = str(request.headers.get("origin") or "").strip()
@@ -332,9 +353,24 @@ async def internal_selection_detail(
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
+    if runtime_policy.safe_mode:
+        products = database.list_products(allow_no_account=True)
+        with database.connect() as connection:
+            row = connection.execute(
+                "SELECT id FROM accounts WHERE is_active=1 AND is_archived=0"
+            ).fetchone()
+        return {
+            "status": "ok", "safe_mode": True, "automation_allowed": False,
+            "product_library": str(settings.product_library),
+            "database": str(settings.database_path),
+            "active_account": database.get_account(int(row[0])) if row else None,
+            "next_product_number": max((int(p["number"]) for p in products), default=0) + 1,
+        }
     products = database.list_products()
     return {
         "status": "ok",
+        "safe_mode": False,
+        "automation_allowed": True,
         "product_library": str(settings.product_library),
         "database": str(settings.database_path),
         "active_account": database.get_active_account(),
@@ -711,7 +747,7 @@ def activate_account(account_id: int) -> dict[str, object]:
 
 @app.get("/api/products")
 def products() -> list[dict[str, object]]:
-    return database.list_products()
+    return database.list_products(allow_no_account=runtime_policy.safe_mode)
 
 
 @app.post("/api/scan")

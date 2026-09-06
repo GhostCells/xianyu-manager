@@ -21,6 +21,7 @@ class Settings:
     browser_headless: bool
     auto_reply_secret_path: Path
     selection_bridge_token_path: Path
+    safe_mode: bool = False
 
 
 def _parse_bool(value: str, *, name: str, default: bool) -> bool:
@@ -74,6 +75,7 @@ def _configured_path(environment_name: str, fallback: Path, *, kind: str) -> Pat
 
 
 def load_settings() -> Settings:
+    safe_mode = read_safe_mode()
     manager_root = Path(__file__).resolve().parents[2]
     project_root = manager_root.parent
     data_dir_override = os.environ.get("XIANYU_MANAGER_DATA_DIR", "").strip()
@@ -110,4 +112,12 @@ def load_settings() -> Settings:
         ),
         auto_reply_secret_path=data_dir / "siliconflow-api-key.dpapi",
         selection_bridge_token_path=selection_bridge_token_path,
+        safe_mode=safe_mode,
+    )
+
+
+def read_safe_mode() -> bool:
+    return _parse_bool(
+        os.environ.get("XIANYU_MANAGER_SAFE_MODE", ""),
+        name="XIANYU_MANAGER_SAFE_MODE", default=False,
     )

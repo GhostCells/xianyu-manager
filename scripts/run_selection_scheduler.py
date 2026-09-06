@@ -15,6 +15,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from xianyu_manager.config import load_settings
+from xianyu_manager.runtime_policy import PROCESS_POLICY
 from xianyu_manager.database import Database
 from xianyu_manager.selection_scheduler import (
     SchedulerInstanceLock,
@@ -42,6 +43,7 @@ async def run_once(config, db, token, logger):
 
 
 async def run_daemon(config, db, token, logger, state_path: Path) -> None:
+    PROCESS_POLICY.require_business()
     if not config.daily_times:
         raise ValueError("定时模式必须配置 daily_times")
     while True:
@@ -57,6 +59,7 @@ async def run_daemon(config, db, token, logger, state_path: Path) -> None:
 
 
 def main() -> int:
+    PROCESS_POLICY.require_business()
     args = parse_args()
     config = load_scheduler_config(args.config)
     if args.keyword:

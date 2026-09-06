@@ -27,6 +27,7 @@ from .auto_reply import (
     manual_review_reason,
 )
 from .database import Database
+from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
 from .notifications import WindowsNotifier
 from .security import SecretStore
 
@@ -616,14 +617,16 @@ class DeliveryService:
         reply_client: SiliconFlowReplyClient | None = None,
         notifier: WindowsNotifier | None = None,
         session_manager: Any | None = None,
+        runtime_policy: RuntimePolicy = PROCESS_POLICY,
     ) -> None:
+        self.runtime_policy = runtime_policy
         self.profiles_dir = profiles_dir
         self.browser_executable = browser_executable
         self._runtime_user_agent = USER_AGENT
         self._runtime_sec_ch_ua_platform = browser_platform_header()
         self.database = database
         self.secret_store = secret_store
-        self.reply_client = reply_client or SiliconFlowReplyClient()
+        self.reply_client = reply_client or SiliconFlowReplyClient(runtime_policy=runtime_policy)
         self.notifier = notifier or WindowsNotifier()
         self.session_manager = session_manager
         self._lock = asyncio.Lock()
@@ -651,11 +654,13 @@ class DeliveryService:
         self._last_auto_reply_at: str | None = None
         self._last_auto_reply_error = ""
 
+    @business_operation
     def _notify(self, account_id: int, title: str, message: str) -> None:
         safety = self.database.get_automation_safety(account_id)
         if safety.get("notifications_enabled"):
             self.notifier.notify(title, message)
 
+    @business_operation
     def _open_safety_circuit(self, account_id: int, reason: str) -> None:
         status = self.database.open_automation_circuit(account_id, reason)
         circuit = status["circuit"]
@@ -668,6 +673,7 @@ class DeliveryService:
             f"{reason}；约 {retry_minutes} 分钟后自动尝试恢复。",
         )
 
+    @business_operation
     async def _outbound_preflight(self, account_id: int, kind: str) -> dict[str, object]:
         decision = self.database.check_automation_outbound(account_id, kind)
         if not decision["allowed"] and decision.get("code") == "interval":
@@ -693,6 +699,7 @@ class DeliveryService:
             "orders": self.database.list_orders(self._account_id) if self._account_id else [],
         }
 
+    @business_operation
     async def preview_recent_orders(self) -> dict[str, object]:
         """Read the seller order list without sending messages or confirming delivery."""
         cookie_map = self._runtime_cookie_map
@@ -700,6 +707,7 @@ class DeliveryService:
             raise RuntimeError("自动发货监听尚未连接，暂时不能读取订单列表")
         return await self._fetch_recent_sold_orders(cookie_map)
 
+    @business_operation
     async def refresh_live_listings(self) -> dict[str, object]:
         """Read current listings through the first-party profile API."""
         async with self._listing_sync_lock:
@@ -735,6 +743,7 @@ class DeliveryService:
                 "listings": listings,
             }
 
+    @business_operation
     async def reconcile_order(self, order_id: str) -> dict[str, object]:
         """Recover one explicitly selected paid order from the seller order list."""
         normalized_order_id = str(order_id or "").strip()
@@ -789,6 +798,7 @@ class DeliveryService:
         order = self.database.get_order(normalized_order_id)
         return {"order": order, "delivery": self.snapshot()}
 
+    @business_operation
     async def start_if_enabled(self) -> dict[str, object]:
         account = self.database.get_active_account()
         auto_reply = self.database.get_auto_reply_settings(int(account["id"]))
@@ -826,6 +836,7 @@ class DeliveryService:
                 self._notify(account_id, "闲鱼管理系统启动异常", self._last_error)
         return snapshot
 
+    @business_operation
     async def start_auto_reply(
         self,
         account_id: int,
@@ -856,6 +867,7 @@ class DeliveryService:
             self._task = asyncio.create_task(self._run(account_id))
         return self.snapshot()
 
+    @business_operation
     async def sync_auto_reply_runtime(self, account_id: int) -> dict[str, object]:
         reply_settings = self.database.get_auto_reply_settings(account_id)
         if reply_settings.get("enabled"):
@@ -865,6 +877,7 @@ class DeliveryService:
             return self.snapshot()
         return await self.stop(persist=False)
 
+    @business_operation
     async def probe(self, account_id: int) -> dict[str, object]:
         async with self._lock:
             if self._task is not None and not self._task.done():
@@ -927,6 +940,7 @@ class DeliveryService:
                     await playwright.stop()
                 self._account_id = None
 
+    @business_operation
     async def start(
         self,
         account_id: int,
@@ -984,6 +998,8 @@ class DeliveryService:
         return self.snapshot()
 
     async def stop(self, *, persist: bool = True) -> dict[str, object]:
+        if persist:
+            self.runtime_policy.require_business()
         async with self._lock:
             account_id = self._account_id
             if persist and account_id is not None:
@@ -1024,6 +1040,7 @@ class DeliveryService:
     async def shutdown(self) -> None:
         await self.stop(persist=False)
 
+    @business_operation
     async def _run(self, account_id: int, initial_delay_seconds: int = 0) -> None:
         retry_delay = 3
         if initial_delay_seconds > 0:
@@ -1164,6 +1181,7 @@ class DeliveryService:
                     except Exception:
                         pass
 
+    @business_operation
     async def _open_authenticated_profile(
         self, account_id: int
     ) -> tuple[Any | None, Any, str, str, str, dict[str, str], bool]:
@@ -1252,6 +1270,7 @@ class DeliveryService:
                 await playwright.stop()
             raise
 
+    @business_operation
     async def _read_profile_cookies(self, account_id: int) -> dict[str, str]:
         from playwright.async_api import async_playwright
 
@@ -1294,6 +1313,7 @@ class DeliveryService:
     def _cookie_header(cookie_map: dict[str, str]) -> str:
         return "; ".join(f"{key}={value}" for key, value in cookie_map.items() if key)
 
+    @business_operation
     async def _fetch_im_token(
         self,
         cookie_map: dict[str, str],
@@ -1405,6 +1425,7 @@ class DeliveryService:
             f"获取闲鱼消息令牌失败，请重新登录或在闲鱼网页完成验证{suffix}"
         )
 
+    @business_operation
     async def _register(self, websocket: Any, token: str, device_id: str) -> None:
         registration = {
             "lwp": "/reg",
@@ -1442,6 +1463,7 @@ class DeliveryService:
             },
         )
 
+    @business_operation
     async def _listen(
         self,
         websocket: Any,
@@ -1529,6 +1551,7 @@ class DeliveryService:
                 self._event_tasks.add(task)
                 task.add_done_callback(self._event_tasks.discard)
 
+    @business_operation
     async def _recover_recent_paid_orders(
         self,
         websocket: Any,
@@ -1613,6 +1636,7 @@ class DeliveryService:
         self._last_recovery_at = time.strftime("%Y-%m-%d %H:%M:%S")
         self._recovered_order_count = recovered_count
 
+    @business_operation
     async def _process_chat_event(
         self,
         websocket: Any,
@@ -1738,6 +1762,7 @@ class DeliveryService:
 
         task.add_done_callback(cleanup)
 
+    @business_operation
     async def _delayed_auto_reply(
         self,
         *,
@@ -1846,6 +1871,7 @@ class DeliveryService:
                 {"account_id": account_id, "chat_id": chat_id, "error": error},
             )
 
+    @business_operation
     async def _process_group_waiting_event(
         self,
         account_id: int,
@@ -1932,6 +1958,7 @@ class DeliveryService:
         self.database.mark_group_exempted(order_id)
         self._last_error = ""
 
+    @business_operation
     async def _process_paid_event(
         self,
         websocket: Any,
@@ -2057,6 +2084,7 @@ class DeliveryService:
         self.database.mark_order_delivered(order_id, platform_status="confirmed")
         self._last_delivery_at = time.strftime("%Y-%m-%d %H:%M:%S")
 
+    @business_operation
     async def _guarded_send_text(
         self,
         websocket: Any,
@@ -2095,6 +2123,7 @@ class DeliveryService:
                 raise
             self.database.finish_automation_outbound(event_id, sent=True)
 
+    @business_operation
     async def _send_text(
         self,
         websocket: Any,
@@ -2140,6 +2169,7 @@ class DeliveryService:
         finally:
             self._pending_acks.pop(mid, None)
 
+    @business_operation
     async def _create_chat(
         self,
         websocket: Any,
@@ -2192,6 +2222,7 @@ class DeliveryService:
             raise RuntimeError("平台未返回有效的订单会话 ID")
         return cid
 
+    @business_operation
     async def _post_mtop(
         self,
         url: str,
@@ -2233,6 +2264,7 @@ class DeliveryService:
             raise RuntimeError("平台返回了无法识别的数据")
         return payload
 
+    @business_operation
     async def _confirm_platform_delivery(
         self, order_id: str, cookie_map: dict[str, str]
     ) -> None:
@@ -2281,6 +2313,7 @@ class DeliveryService:
             error = str(ret[0]) if ret else "未知平台响应"
             raise RuntimeError(error[:200])
 
+    @business_operation
     async def _free_group_order(
         self,
         order_id: str,
@@ -2332,6 +2365,7 @@ class DeliveryService:
             error = str(ret[0]) if ret else "未知平台响应"
             raise RuntimeError(error[:200])
 
+    @business_operation
     async def _fetch_live_inventory(
         self,
         cookie_map: dict[str, str],
@@ -2403,6 +2437,7 @@ class DeliveryService:
             next_page_num = response_data.get("nextPageNum")
         return raw_items
 
+    @business_operation
     async def _fetch_recent_sold_orders(
         self, cookie_map: dict[str, str], *, page_size: int = 20
     ) -> dict[str, object]:
@@ -2493,6 +2528,7 @@ class DeliveryService:
             "total_count": str(module.get("totalCount") or "") if isinstance(module, dict) else "",
         }
 
+    @business_operation
     async def _resolve_order_by_chat_id(
         self,
         account_id: int,
@@ -2552,6 +2588,7 @@ class DeliveryService:
             return None
         return matches[0]
 
+    @business_operation
     async def _send_json(self, websocket: Any, payload: dict[str, Any]) -> None:
         async with self._send_lock:
             await websocket.send(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))

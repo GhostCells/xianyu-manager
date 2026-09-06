@@ -476,7 +476,7 @@ ACCOUNT_PRODUCT_FIELDS = {
 
 
 class Database:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, safe_mode: bool = False):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
@@ -492,7 +492,8 @@ class Database:
             self._ensure_selection_review_columns(connection)
             self._ensure_selection_pipeline_columns(connection)
             self._backfill_selection_tracking(connection)
-            self._migrate_auto_reply_to_siliconflow(connection)
+            if not safe_mode:
+                self._migrate_auto_reply_to_siliconflow(connection)
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -1598,7 +1599,7 @@ class Database:
             """
         )
 
-    def sync_products(self, scanned: list[ScannedProduct]) -> None:
+    def sync_products(self, scanned: list[ScannedProduct], *, safe_mode: bool = False) -> None:
         with self.connect() as connection:
             for product in scanned:
                 existing = connection.execute(
@@ -1658,7 +1659,7 @@ class Database:
                         product.scanned_at,
                     ),
                 )
-                if changed:
+                if changed and not safe_mode:
                     self._log(connection, "zip_changed", product.dir_name, {"zip_hash": product.zip_hash})
 
     def ensure_default_accounts(self) -> None:
@@ -1919,8 +1920,9 @@ class Database:
         account_id: int | None = None,
         *,
         include_listing_only: bool = False,
+        allow_no_account: bool = False,
     ) -> list[dict[str, object]]:
-        if account_id is None:
+        if account_id is None and not allow_no_account:
             account_id = int(self.get_active_account()["id"])
         with self.connect() as connection:
             rows = connection.execute(

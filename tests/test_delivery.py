@@ -25,6 +25,7 @@ from xianyu_manager.delivery import (
     group_event_stage,
     parse_market_timestamp,
 )
+from xianyu_manager.runtime_policy import RuntimePolicy
 
 
 def test_browser_platform_header_matches_runtime_platform():
@@ -200,6 +201,7 @@ def test_inventory_cards_keep_only_currently_listed_items():
 
 def test_live_inventory_uses_first_party_profile_api_shape():
     service = object.__new__(DeliveryService)
+    service.runtime_policy = RuntimePolicy(False)
     service._runtime_user_agent = "Mozilla/5.0 test"
     captured = {}
 
@@ -247,6 +249,7 @@ def test_live_inventory_uses_first_party_profile_api_shape():
 
 def test_im_token_uses_browser_request_context_and_refreshes_cookies():
     service = object.__new__(DeliveryService)
+    service.runtime_policy = RuntimePolicy(False)
     service._runtime_user_agent = (
         "Mozilla/5.0 Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
     )
