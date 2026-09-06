@@ -63,7 +63,7 @@ def rollback(manifest):
     present = {(x['table']['family'], x['table']['name']) for x in tables if 'table' in x}
     if ('inet', 'xianyu_guard') in present:
         run('nft', 'flush', 'set', 'inet', 'xianyu_guard', 'lease')
-    namespaces = {x['name'] for x in json.loads(run('ip', '-j', 'netns', 'list'))}
+    namespaces = {x['name'] for x in json.loads(run('ip', '-j', 'netns', 'list') or '[]')}
     if 'xianyu-business' in namespaces:
         assert not run('ip', 'netns', 'pids', 'xianyu-business'), 'BUSINESS_STILL_RUNNING'
     # No protection is removed until forwarding and affected values are restored.

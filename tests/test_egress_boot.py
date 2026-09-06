@@ -9,13 +9,15 @@ spec.loader.exec_module(mod)
 
 
 @pytest.mark.parametrize('fail', [None, 'scope', 'apply'])
-def test_protection_precedes_forwarding_no_lease(monkeypatch, tmp_path, fail):
+@pytest.mark.parametrize('namespace_output', ['', '[]'])
+def test_protection_precedes_forwarding_no_lease(monkeypatch, tmp_path, fail, namespace_output):
     monkeypatch.setattr(mod, 'ROOT', tmp_path)
     (tmp_path / 'window-id').write_text('synthetic')
     calls = []
     def run(*args):
         calls.append(args)
         if args == ('sysctl', '-n', 'net.ipv4.ip_forward'): return '0'
+        if args == ('ip', '-j', 'netns', 'list'): return namespace_output
         if args[:2] == ('ip', '-j'): return '[]'
         if args[:2] == ('nft', '-j'): return '{"nftables": []}'
         if fail == 'scope' and args[:2] == ('nft', '--file'): raise RuntimeError()

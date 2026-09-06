@@ -14,7 +14,9 @@ def start(run, trusted):
     assert run('sysctl', '-n', 'net.ipv4.ip_forward') == '0', 'FORWARDING_BASELINE_CHANGED'
     links = json.loads(run('ip', '-j', 'link', 'show'))
     assert not any(x['ifname'] in ('xmg-host', 'xmg-net') for x in links)
-    assert not json.loads(run('ip', '-j', 'netns', 'list')), 'UNREVIEWED_NAMESPACE'
+    # iproute2 emits an empty string when /run/netns does not yet exist on
+    # a fresh boot, versus [] after the directory has existed in this boot.
+    assert not json.loads(run('ip', '-j', 'netns', 'list') or '[]'), 'UNREVIEWED_NAMESPACE'
     assert not any(x.get('priority') == 1000 for x in json.loads(run('ip', '-j', '-4', 'rule', 'show')))
     tables = json.loads(run('nft', '-j', 'list', 'tables'))['nftables']
     assert not any(x.get('table', {}).get('name') in

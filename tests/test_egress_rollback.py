@@ -36,7 +36,7 @@ def test_restore_before_delete_and_repeat(monkeypatch, tmp_path, populated, fail
             tables = mod.TABLES[:1] if populated == 'partial' else mod.TABLES
             return json.dumps({'nftables': [{'table':dict(family=f,name=t)} for f,t in tables] if populated else []})
         if args == ('ip', '-j', 'netns', 'list'):
-            return '[{"name":"xianyu-business"}]' if populated else '[]'
+            return '[{"name":"xianyu-business"}]' if populated else ''
         if args in [('ip','-j','link','show'), ('ip','-j','-4','rule','show')]: return '[]'
         if args == ('sysctl', '-n', 'net.ipv4.ip_forward'): return '0'
         return ''
