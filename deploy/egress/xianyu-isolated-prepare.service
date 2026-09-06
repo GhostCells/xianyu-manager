@@ -1,0 +1,43 @@
+# TEMPLATE ONLY: stage new preparation data and root-owned code before installing.
+[Unit]
+Description=Single account isolated PREPARATION - login and business forbidden
+Requires=xianyu-preparation-display.service
+After=xianyu-preparation-display.service
+ConditionPathExists=/run/netns/xianyu-business
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+User=xianyu-runtime
+Group=xianyu-api
+NetworkNamespacePath=/run/netns/xianyu-business
+EnvironmentFile=/etc/xianyu-egress/runtime.env
+WorkingDirectory=/opt/xianyu-manager
+ExecStartPre=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/wait_preparation_display.py
+ExecStart=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/run_preparation_service.py
+RuntimeDirectory=xianyu-runtime
+RuntimeDirectoryMode=0750
+UMask=0007
+KillMode=control-group
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/xianyu-runtime /run/xianyu-runtime
+BindReadOnlyPaths=/etc/xianyu-egress/resolv.conf:/etc/resolv.conf
+TemporaryFileSystem=/tmp /run
+BindReadOnlyPaths=/tmp/.X11-unix/X99:/tmp/.X11-unix/X99 /run/xianyu-egress:/run/xianyu-egress
+BindPaths=/run/xianyu-runtime:/run/xianyu-runtime
+InaccessiblePaths=/var/tmp
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+StandardOutput=null
+StandardError=null

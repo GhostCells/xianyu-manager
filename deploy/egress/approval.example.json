@@ -1,0 +1,10 @@
+{
+  "approved": false,
+  "approval_id": "",
+  "exit_node_ip": "100.66.224.40",
+  "reviewed_public_ip": null,
+  "boot_id": "",
+  "expires_at": 0,
+  "rules_sha256": "",
+  "fault_report_sha256": ""
+}

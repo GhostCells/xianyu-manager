@@ -1,0 +1,25 @@
+[Unit]
+Description=Root-owned egress observation and short kernel lease
+After=tailscaled.service
+ConditionPathExists=/run/netns/xianyu-business
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/
+ExecStart=/usr/bin/python3 -I /usr/local/lib/xianyu-egress/egress_control.py watch
+RuntimeDirectory=xianyu-egress
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StateDirectory=xianyu-egress
+StateDirectoryMode=0755
+UMask=0022
+Restart=no
+TimeoutStopSec=12
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/xianyu-egress /var/lib/xianyu-egress
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+StandardOutput=journal
+StandardError=null

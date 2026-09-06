@@ -1,0 +1,43 @@
+# One private veth only. Empty expiring lease is the fail-closed initial state.
+table inet xianyu_guard {
+    set lease { type ipv4_addr; flags timeout; timeout 30s; }
+    set private4 {
+        type ipv4_addr; flags interval;
+        elements = { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+                     169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16,
+                     192.0.0.0/24, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4 }
+    }
+    chain host_input {
+        type filter hook input priority -150; policy accept;
+        iifname "xmg-host" drop
+    }
+    chain host_output {
+        type filter hook output priority -150; policy accept;
+        oifname "xmg-host" drop
+    }
+    chain business_out {
+        meta nfproto ipv6 drop
+        ip saddr != 10.203.0.2 drop
+        ip daddr @private4 drop
+        ip saddr @lease oifname "tailscale0" ip daddr 1.1.1.1 udp dport 53 accept
+        ip saddr @lease oifname "tailscale0" ip daddr 1.1.1.1 tcp dport 53 accept
+        ip saddr @lease oifname "tailscale0" tcp dport { 80, 443 } accept
+        drop
+    }
+    chain business_in {
+        meta nfproto ipv6 drop
+        iifname "tailscale0" ip daddr @lease ct state { established, related } accept
+        drop
+    }
+    chain business_forward {
+        type filter hook forward priority -150; policy accept;
+        iifname "xmg-host" jump business_out
+        oifname "xmg-host" jump business_in
+    }
+}
+table ip xianyu_nat {
+    chain business_snat {
+        type nat hook postrouting priority 100; policy accept;
+        ip saddr 10.203.0.2 oifname "tailscale0" masquerade
+    }
+}

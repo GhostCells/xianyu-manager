@@ -17,6 +17,15 @@ def exit_status(code, stopping):
     return 0 if stopping and code in (0, -signal.SIGTERM, -signal.SIGINT) else code
 
 
+def listen_arguments():
+    uds = os.environ.get("XIANYU_MANAGER_API_UDS", "")
+    if not uds:
+        return ["--host", "127.0.0.1", "--port", "8765"]
+    if uds != "/run/xianyu-runtime/api.sock":
+        raise ValueError("PREPARATION_UDS_PATH_NOT_ALLOWED")
+    return ["--uds", uds]
+
+
 def main():
     if PROCESS_POLICY.mode != "prepare" or PROCESS_POLICY.login_authorized:
         raise SystemExit("PREPARATION_LAUNCHER_REQUIRES_PREPARE_AND_LOGIN_DISABLED")
@@ -37,10 +46,7 @@ def main():
             "-m",
             "uvicorn",
             "xianyu_manager.app:app",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "8765",
+            *listen_arguments(),
             "--workers",
             "1",
             "--lifespan",

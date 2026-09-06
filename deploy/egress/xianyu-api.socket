@@ -1,0 +1,10 @@
+[Unit]
+Description=Loopback-only management gateway to isolated preparation API
+
+[Socket]
+ListenStream=127.0.0.1:8765
+NoDelay=true
+Service=xianyu-api.service
+
+[Install]
+WantedBy=sockets.target

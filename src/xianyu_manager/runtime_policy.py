@@ -4,10 +4,10 @@ from dataclasses import dataclass, field
 from functools import wraps
 from inspect import iscoroutinefunction, signature
 from pathlib import Path
-import json
 import time
 
 from .config import read_safe_mode, read_runtime_options
+from .egress_control import read_root_json, clock_valid
 
 
 class SafeModeOperationBlocked(RuntimeError):
@@ -53,7 +53,9 @@ class RuntimePolicy:
             path = self.egress_status_path
             if path is None or path.is_symlink() or path.stat().st_mode & 0o022:
                 return result
-            data = json.loads(path.read_text())
+            data = read_root_json(path)
+            if not clock_valid(data):
+                return {**result, 'reason': 'EGRESS_UNTRUSTED_OR_EXPIRED'}
             age = time.time() - float(data["checked_at"])
             ready = (
                 0 <= age <= 60

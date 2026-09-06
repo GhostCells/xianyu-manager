@@ -21,6 +21,17 @@ from xianyu_manager.session import BrowserSessionManager
 from test_safe_mode import snapshot
 
 
+@pytest.fixture(autouse=True)
+def synthetic_root_producer(monkeypatch):
+    # Fixtures stand in for the root-owned producer, never relax the actual loader.
+    from xianyu_manager import runtime_policy, egress_control
+
+    monkeypatch.setattr(
+        runtime_policy, "read_root_json", lambda path: json.loads(path.read_text())
+    )
+    monkeypatch.setattr(egress_control, "boot_id", lambda: "synthetic-boot")
+
+
 @pytest.fixture
 def prepared(tmp_path, monkeypatch):
     db = Database(tmp_path / "manager.db", prepare_mode=True)
@@ -98,12 +109,27 @@ def test_prepare_full_lifespan_and_restart_never_recovers(prepared):
         assert snapshot(db) == before
 
 
+def test_delivery_account_id_is_retained_runtime_not_selected_account(prepared):
+    database, _, delivery = prepared
+    database.prepare_mode = False  # legacy Windows field semantics, synthetic only
+    delivery._account_id = 2
+    delivery._status = "verification_required"
+    delivery._task = None
+    result = api.delivery_status()  # fixture's database-selected account is 1
+    assert result["account_id"] == 2 and result["running"] is False
+    assert result["status"] == "verification_required"
+
+
 def ready_policy(tmp_path, **overrides):
     p = tmp_path / "egress.json"
     p.write_text(
         json.dumps(
             dict(
                 checked_at=time.time(),
+                checked_monotonic=time.monotonic(),
+                valid_until_monotonic=time.monotonic() + 19,
+                schema_version=1,
+                boot_id="synthetic-boot",
                 exit_node_ip="100.66.224.40",
                 client_running=True,
                 routes_ready=True,

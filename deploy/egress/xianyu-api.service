@@ -1,0 +1,15 @@
+[Unit]
+Description=Fixed-target private management gateway, not an outbound proxy
+Requires=xianyu-isolated-prepare.service
+After=xianyu-isolated-prepare.service
+
+[Service]
+User=xianyu-proxy
+Group=xianyu-api
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd /run/xianyu-runtime/api.sock
+NoNewPrivileges=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET

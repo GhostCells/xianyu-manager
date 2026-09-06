@@ -2,6 +2,8 @@
 
 本次已确认迁移 Windows 当前运营账号。数据库 ID 必须从旧端实际 runtime 核对，不能从演练库 inactive 状态或昵称猜测。缺少 ID 时先部署未绑定 prepare 后台。
 
+2026-09-06 最新状态：Windows 仍是尚未正式切换的旧端和最终数据来源，但本次查询的自动化监听服务未运行，处于需要验证状态（account_id=2、verification_required、running=false）。不能推断封号，不能省略切换窗口停发和在途核对。候选内部 ID=2 的定向证据与尚未应用的出口部署配置见 `egress-enforcement-window.md`。本轮保持账号未绑定，不声称已验证平台身份。
+
 ## 固定进程策略与 API
 
 `XIANYU_MANAGER_SAFE_MODE=true` 优先，原白名单和业务拒绝保持。
@@ -39,9 +41,9 @@ prepare 的启动只迁移兼容 schema 和扫描本地资料，跳过默认账�
 
 ## 出口门禁与尚未应用的强制限制
 
-managed 策略（prepare 或显式 ACCOUNT_ID）读取 `XIANYU_MANAGER_EGRESS_STATUS_PATH` 的受保护诊断/验收记录：指定 R2S、客户端与 IPv4/IPv6 路由、观测时间（60 秒有效）、人工复核地址与当前观测一致、review_required=false、enforcement_verified=true 才放行。历史公网地址不是源码常量，direct/relay 不参与出口身份判断。
+managed 策略（prepare 或显式 ACCOUNT_ID）读取 `XIANYU_MANAGER_EGRESS_STATUS_PATH` 的 root 控制目录及普通文件，拒绝业务可写路径和符号链接。新契约同时核对 boot ID、单调时钟和墙钟（20 秒有效）；指定 R2S、客户端及受限路由、人工复核地址与当前观测一致、review_required=false、enforcement_verified=true 才放行。历史公网地址不是源码常量，direct/relay 不参与出口身份判断。当前准备环境未配置此文件，继续阻断登录。
 缺失/过期/异常拒绝浏览器、HTTP/MTOP/WebSocket及任务入口；运行中的主服务每两秒检查，异常关闭自身 runtime/Context并锁存，不能因网络恢复自动重启。此检查仍有窗口，不等于内核限制，也不承诺已经发出的外部请求可撤销；取消中的 sending 保留待人工核对。
-诊断脚本 `scripts/inspect_runtime_egress.py` 只观察，不签发批准：enforcement_verified 永远 false、review_required 永远 true。准备部署不会伪造批准记录。后续需要受信任、非业务用户可写的监测/验收记录更新器；不能手工改 checked_at 冒充新观测。
+诊断脚本 `scripts/inspect_runtime_egress.py` 只观察，不签发批准：enforcement_verified 永远 false、review_required 永远 true。新 `egress_control.py` 是独立 root 状态生产者，部署后复用同一策略契约；本轮仅代码/合成验证，未安装或运行该生产者，未签发批准。不能手工改 checked_at 冒充新观测。
 
 **下面是下一窗口的具体方案，不在本轮应用：**
 

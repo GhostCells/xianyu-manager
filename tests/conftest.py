@@ -23,7 +23,7 @@ os.environ["XIANYU_PRODUCT_VALIDATOR_PATH"] = str(_validator)
 os.environ.pop("SILICONFLOW_API_KEY", None)
 os.environ.pop("XIANYU_BROWSER_EXECUTABLE", None)
 os.environ.pop("XIANYU_MANAGER_SAFE_MODE", None)
-for option in ("PREPARE_MODE", "ACCOUNT_ID", "LOGIN_AUTHORIZED", "EGRESS_STATUS_PATH"):
+for option in ("PREPARE_MODE", "ACCOUNT_ID", "LOGIN_AUTHORIZED", "EGRESS_STATUS_PATH", "API_UDS"):
     os.environ.pop("XIANYU_MANAGER_" + option, None)
 
 
