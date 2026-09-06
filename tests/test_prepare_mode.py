@@ -414,3 +414,19 @@ def test_preparation_launcher_stop_status(code, stopping, expected):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.exit_status(code, stopping) == expected
+
+
+@pytest.mark.parametrize("state,finished", [("S", False), ("Z", True), (None, True)])
+def test_vnc_stop_waits_for_process_exit(tmp_path, monkeypatch, state, finished):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts/stop_preparation_vnc.py"
+    spec = importlib.util.spec_from_file_location("preparation_vnc_stop", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if state:
+        (tmp_path / "123").mkdir()
+        (tmp_path / "123/stat").write_text("123 (x11vnc) " + state + " 1 2")
+    monkeypatch.setattr(module, "Path", lambda _: tmp_path)
+    assert module.process_finished(123) == finished
