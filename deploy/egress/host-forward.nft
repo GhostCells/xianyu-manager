@@ -1,0 +1,13 @@
+# IPv4 scope only; no INPUT/OUTPUT, IPv6 or existing-chain changes.
+# nft(8), VERDICT STATEMENT (verified on target): an accepted packet can still
+# be dropped by another forward base chain with a higher priority number.
+# Thus scope admission at -175 STILL traverses guard -150 and Tailscale 0.
+# This file must pass isolated flow tests before installation on the host.
+table ip xianyu_forward_scope {
+    chain scope {
+        type filter hook forward priority -175; policy accept;
+        iifname "xmg-host" oifname "tailscale0" ip saddr 10.203.0.2 counter accept
+        iifname "tailscale0" oifname "xmg-host" ip daddr 10.203.0.2 counter accept
+        counter drop
+    }
+}

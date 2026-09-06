@@ -232,7 +232,8 @@ def observe():
     all_rules = json.loads(run("nft", "-j", "list", "ruleset"))
     guard = json.loads(run("nft", "-j", "list", "table", "inet", "xianyu_guard"))
     nat = json.loads(run("nft", "-j", "list", "table", "ip", "xianyu_nat"))
-    combined = {"nftables": guard["nftables"] + nat["nftables"]}
+    scope = json.loads(run("nft", "-j", "list", "table", "ip", "xianyu_forward_scope"))
+    combined = {"nftables": guard["nftables"] + nat["nftables"] + scope["nftables"]}
     return {
         "exit_node_ip": next(
             (x for x in peer.get("TailscaleIPs", []) if ":" not in x), None
@@ -355,7 +356,8 @@ def main():
     if args.action == "digest":
         guard = json.loads(run("nft", "-j", "list", "table", "inet", "xianyu_guard"))
         nat = json.loads(run("nft", "-j", "list", "table", "ip", "xianyu_nat"))
-        print(rule_digest({"nftables": guard["nftables"] + nat["nftables"]}))
+        scope = json.loads(run("nft", "-j", "list", "table", "ip", "xianyu_forward_scope"))
+        print(rule_digest({"nftables": guard["nftables"] + nat["nftables"] + scope["nftables"]}))
         return
     if os.geteuid() != 0:
         raise SystemExit("ROOT_PRODUCER_REQUIRED")

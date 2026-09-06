@@ -12,6 +12,8 @@ for file in "$BUNDLE" "$BUNDLE/apply-network.sh" "$BUNDLE/guard.nft"; do
 done
 # Never enable host forwarding or change Exit Node implicitly.
 test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
+# The approved wrapper MUST load scope protection before enabling forwarding.
+nft list table ip xianyu_forward_scope >/dev/null
 ip link show tailscale0 >/dev/null
 test ! -e /run/netns/xianyu-business
 if ip link show xmg-host >/dev/null 2>&1; then exit 1; fi

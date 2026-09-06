@@ -1,5 +1,14 @@
 # 首账号记录与出口保护：准备交付，未应用在线规则
 
+## 后续维护补充（优先于下文历史记录）
+
+用户已明确确认内部账号2并完成prepare配置绑定，Windows字段来源核对已收口；不再要求确认编号或运行版本。真实平台身份未验证。
+维护窗口已批准，控制台VNC已由用户验证。允许独立IPv4 forward范围表，保持非业务转发禁止，不修改Tailscale自有规则或既有默认策略。
+`host-forward.nft`在-175优先级只准精确双向业务接口和地址继续接受-150业务lease门禁；非业务IPv4丢弃，不触及其他hook/IPv6。
+`rollback-window.py`读取root受控独占对象清单，先停业务/更新器并撤lease，确认namespace无人，再恢复转发与本轮实际受影响的可写sysctl，验证成功后才删除专属对象。参数恢复失败保留保护。原服务配置先验证哈希和prepare/login/account约束，不覆盖业务库。
+回退清单的`restore_sysctls`必须在开启转发前记录潜在受影响可写项，并在变更后收窄到实际差异；不能缺失后再补。未布置实际timer时不得执行在线部署。
+新增匿名网络空间真实包预检覆盖空lease、精确路径、非业务阻断及到期阻断，并加入后置合成ACCEPT链。它不替代实际业务UID、浏览器、宿主网络或真实回退验收。
+
 ## 已核实的账号事实（2026-09-06）
 
 用户确认同账号迁移，回传 Windows GET /api/delivery：account_id=2、status=verification_required、running=false。
