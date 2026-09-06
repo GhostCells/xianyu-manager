@@ -1,5 +1,6 @@
 """Fail-closed, manifest-scoped rollback. Install root-owned; never run Git as root."""
 import json
+import ipaddress
 import os
 from pathlib import Path
 import re
@@ -23,6 +24,17 @@ def trusted(path):
 TABLES = [('inet', 'xianyu_guard'), ('ip', 'xianyu_nat'), ('ip', 'xianyu_forward_scope')]
 UNITS = ['xianyu-egress.service', 'xianyu-isolated-prepare.service',
          'xianyu-api.socket', 'xianyu-api.service', 'xianyu-network-test.service']
+
+
+def is_owned_return_rule(rule):
+    dst = rule.get('dst', '')
+    if '/' not in dst:
+        dst += '/' + str(rule.get('dstlen', 32))
+    try:
+        return (ipaddress.ip_network(dst) == ipaddress.ip_network('10.203.0.0/30')
+                and rule.get('table') in ('main', 254) and rule.get('src', 'all') == 'all')
+    except ValueError:
+        return False
 
 
 def rollback(manifest):
@@ -63,7 +75,7 @@ def rollback(manifest):
     rules = json.loads(run('ip', '-j', '-4', 'rule', 'show'))
     for rule in rules:
         if rule.get('priority') == 1000:
-            assert rule.get('dst') == '10.203.0.0/30' and rule.get('table') in ('main', 254)
+            assert is_owned_return_rule(rule)
             run('ip', '-4', 'rule', 'del', 'priority', '1000', 'to', '10.203.0.0/30', 'lookup', 'main')
     if 'xianyu-business' in namespaces:
         run('ip', 'netns', 'del', 'xianyu-business')

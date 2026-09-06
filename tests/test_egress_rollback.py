@@ -61,3 +61,13 @@ def test_scope_is_ipv4_and_priorities_are_distinct():
     rules=[x.strip() for x in text.splitlines() if 'counter accept' in x]
     assert len(rules)==2
     assert all('iifname' in x and 'oifname' in x and '10.203.0.2' in x for x in rules)
+
+
+@pytest.mark.parametrize('rule,expected', [
+    ({'dst':'10.203.0.0','dstlen':30,'table':'main'}, True),
+    ({'dst':'10.203.0.0/30','table':'main'}, True),
+    ({'dst':'10.203.0.0','dstlen':24,'table':'main'}, False),
+    ({'dst':'10.203.0.0/30','table':52}, False),
+])
+def test_actual_iproute_json_preserves_exact_ownership(rule, expected):
+    assert mod.is_owned_return_rule(rule) == expected

@@ -242,7 +242,7 @@ def observe():
         run("ip", "-n", NAMESPACE, "-j", "-4", "route", "show", "default")
     )
     reply_route = json.loads(
-        run("ip", "-j", "-4", "route", "get", CLIENT_IP, "iif", "tailscale0")
+        run("ip", "-j", "-4", "route", "get", CLIENT_IP, "from", "1.1.1.1", "iif", "tailscale0")
     )
     all_rules = json.loads(run("nft", "-j", "list", "ruleset"))
     guard = json.loads(run("nft", "-j", "list", "table", "inet", "xianyu_guard"))
