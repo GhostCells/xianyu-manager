@@ -1,0 +1,76 @@
+"""Preparation-only launcher with bounded, content-free operational logging."""
+
+import logging
+from logging.handlers import RotatingFileHandler
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+
+from xianyu_manager.runtime_policy import PROCESS_POLICY
+
+
+def main():
+    if PROCESS_POLICY.mode != "prepare" or PROCESS_POLICY.login_authorized:
+        raise SystemExit("PREPARATION_LAUNCHER_REQUIRES_PREPARE_AND_LOGIN_DISABLED")
+    if os.environ.get("SILICONFLOW_API_KEY"):
+        raise SystemExit("PREPARATION_MUST_NOT_HAVE_LLM_SECRET")
+    log = logging.getLogger("preparation")
+    log.setLevel(logging.INFO)
+    handler = RotatingFileHandler(
+        Path(os.environ["XIANYU_MANAGER_DATA_DIR"]).parent / "service.log",
+        maxBytes=1024 * 1024,
+        backupCount=3,
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    log.addHandler(handler)
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "xianyu_manager.app:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8765",
+            "--workers",
+            "1",
+            "--lifespan",
+            "on",
+            "--no-access-log",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    def stop(signum, _frame):
+        if child.poll() is None:
+            child.send_signal(signum)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    log.info("prepare_process_started")
+    allowed = (
+        "Application startup complete",
+        "Application shutdown complete",
+        "Waiting for application shutdown",
+        "Shutting down",
+    )
+    suppressed = False
+    for line in child.stdout:
+        marker = next((x for x in allowed if x in line), None)
+        if marker:
+            log.info(marker)
+        elif not suppressed:
+            log.info("runtime_output_redacted")
+            suppressed = True
+    code = child.wait()
+    log.info("prepare_process_exited code=%s", code)
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
