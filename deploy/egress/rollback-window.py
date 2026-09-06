@@ -48,7 +48,7 @@ def rollback(manifest):
     # No protection is removed until forwarding and affected values are restored.
     run('sysctl', '-q', '-w', 'net.ipv4.ip_forward=0')
     for key, value in manifest['restore_sysctls'].items():
-        assert re.fullmatch(r'net\.ipv4\.conf\.(all|default|eth0|tailscale0)\.[a-z_]+', key)
+        assert re.fullmatch(r'net\.ipv4\.conf\.(all|default|lo|eth0|tailscale0)\.[a-z_]+', key)
         assert re.fullmatch(r'-?\d+', value)
         run('sysctl', '-q', '-w', key + '=' + value)
     assert run('sysctl', '-n', 'net.ipv4.ip_forward') == '0'
