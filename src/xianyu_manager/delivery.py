@@ -26,6 +26,7 @@ from .auto_reply import (
     manual_review_reason,
 )
 from .database import Database
+from .browser_launch import sandbox_options
 from .fulfillment_rules import compose_delivery_message, delivery_issues, parse_listing_id
 from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
 from .notifications import WindowsNotifier
@@ -1125,6 +1126,7 @@ class DeliveryService:
             else:
                 playwright = await async_playwright().start()
                 context = await playwright.chromium.launch_persistent_context(
+                    **sandbox_options(),
                     user_data_dir=str(
                         self.profiles_dir
                         / self.browser_executable.stem.lower()
@@ -1203,6 +1205,7 @@ class DeliveryService:
         context = None
         try:
             context = await playwright.chromium.launch_persistent_context(
+                **sandbox_options(),
                 user_data_dir=str(
                     self.profiles_dir
                     / (self.browser_executable.stem.lower() if self.browser_executable else "chromium")

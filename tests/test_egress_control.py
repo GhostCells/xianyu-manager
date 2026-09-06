@@ -248,7 +248,7 @@ def test_scoped_deployment_contract():
     service = (root / "xianyu-isolated-prepare.service").read_text()
     assert "User=xianyu-runtime" in service and "NetworkNamespacePath=" in service
     assert (
-        "RestrictNamespaces=true" in service and "CapabilityBoundingSet=\n" in service
+        "RestrictNamespaces=user pid net" in service and "CapabilityBoundingSet=\n" in service
     )
     assert "TemporaryFileSystem=/tmp /run" in service
     assert "Restart=no" in (root / "xianyu-egress.service").read_text()

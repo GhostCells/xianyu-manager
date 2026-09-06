@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .database import Database
+from .browser_launch import sandbox_options
 from .fulfillment_rules import parse_listing_id
 from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation, login_operation
 from .profile_lock import ProfileOwnerLock
@@ -230,6 +231,7 @@ class BrowserSessionManager:
         try:
             self._playwright = await async_playwright().start()
             self._context = await self._playwright.chromium.launch_persistent_context(
+                **sandbox_options(),
                 user_data_dir=str(profile_dir),
                 executable_path=str(self.browser_executable),
                 headless=self.browser_headless,
@@ -516,6 +518,7 @@ class BrowserSessionManager:
                     profile_lock.acquire()
                     playwright = await async_playwright().start()
                     context = await playwright.chromium.launch_persistent_context(
+                        **sandbox_options(),
                         user_data_dir=str(self.profile_dir(account_id)),
                         executable_path=str(self.browser_executable),
                         headless=self.browser_headless,

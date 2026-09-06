@@ -25,7 +25,9 @@ RestartSec=15
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-RestrictNamespaces=true
+# Chromium's unprivileged sandbox needs nested user/pid/net namespaces.
+# No host capabilities; new net namespaces have no host interface or routes.
+RestrictNamespaces=user pid net
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ProtectSystem=strict
 ProtectHome=true
