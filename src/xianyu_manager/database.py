@@ -484,8 +484,10 @@ ACCOUNT_PRODUCT_FIELDS = {
 
 
 class Database:
-    def __init__(self, path: Path, *, safe_mode: bool = False):
+    def __init__(self, path: Path, *, safe_mode: bool = False, prepare_mode: bool = False, runtime_account_id: int | None = None):
         self.safe_mode = safe_mode
+        self.prepare_mode = prepare_mode
+        self.runtime_account_id = runtime_account_id
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
@@ -499,6 +501,9 @@ class Database:
                 ("products", "share_verified_at", "TEXT"),
                 ("orders", "fulfillment_fingerprint", "TEXT NOT NULL DEFAULT ''"),
                 ("orders", "fulfillment_text_hash", "TEXT NOT NULL DEFAULT ''"),
+                ("orders", "manual_delivery_state", "TEXT NOT NULL DEFAULT ''"),
+                ("orders", "manual_platform_state", "TEXT NOT NULL DEFAULT ''"),
+                ("orders", "manual_review_revision", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name not in {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}:
                     connection.execute(f'ALTER TABLE {table} ADD COLUMN {name} {declaration}')
@@ -509,8 +514,16 @@ class Database:
             self._ensure_selection_review_columns(connection)
             self._ensure_selection_pipeline_columns(connection)
             self._backfill_selection_tracking(connection)
-            if not safe_mode:
+            connection.execute('''CREATE TABLE IF NOT EXISTS order_manual_reviews (
+                id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id),
+                order_id TEXT NOT NULL REFERENCES orders(xianyu_order_id),
+                action TEXT NOT NULL, platform_state TEXT NOT NULL,
+                operator TEXT NOT NULL, reason TEXT NOT NULL, evidence_ref TEXT NOT NULL,
+                before_fingerprint TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)''')
+            if not safe_mode and not prepare_mode:
                 self._migrate_auto_reply_to_siliconflow(connection)
+            if runtime_account_id is not None and not self.get_account(runtime_account_id):
+                raise ValueError('RUNTIME_ACCOUNT_NOT_FOUND_OR_ARCHIVED')
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -1815,6 +1828,13 @@ class Database:
         ]
 
     def get_active_account(self) -> dict[str, object]:
+        if self.runtime_account_id is not None:
+            account = self.get_account(self.runtime_account_id)
+            if account is None:
+                raise RuntimeError('RUNTIME_ACCOUNT_NOT_FOUND')
+            return account
+        if self.prepare_mode:
+            raise RuntimeError('RUNTIME_ACCOUNT_NOT_BOUND')
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM accounts WHERE is_active = 1 AND is_archived = 0"
@@ -2044,7 +2064,7 @@ class Database:
     @staticmethod
     def _require_no_pending_delivery(connection, dir_name):
         if connection.execute(
-            "SELECT 1 FROM orders WHERE product_dir_name=? AND delivery_status='sending' AND message_sent_at IS NULL",
+            "SELECT 1 FROM orders WHERE product_dir_name=? AND delivery_status='sending' AND message_sent_at IS NULL AND manual_delivery_state NOT IN ('confirmed_sent','confirmed_not_sent')",
             (dir_name,),
         ).fetchone():
             raise ValueError("DELIVERY_IN_FLIGHT: 交付处理中或结果未明，先核对订单")
@@ -2123,7 +2143,7 @@ class Database:
     def claim_verified_delivery(
         self, order_id: str, account_id: int, item_id: str
     ) -> dict | None:
-        if self.safe_mode:
+        if self.safe_mode or self.prepare_mode:
             raise ValueError("SAFE_MODE_OPERATION_BLOCKED")
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -2137,6 +2157,7 @@ class Database:
                 or order["account_id"] != account_id
                 or order["listing_item_id"] != item_id
                 or order["product_dir_name"] != product["dir_name"]
+                or order['manual_delivery_state']
                 or delivery_issues(product)
                 or not self._account_can_deliver(
                     connection, account_id, order["chat_id"]
@@ -2159,7 +2180,7 @@ class Database:
     def validate_delivery_claim(
         self, order_id, account_id, chat_id, text, *, buyer_id=None
     ):
-        if self.safe_mode:
+        if self.safe_mode or self.prepare_mode:
             return False
         with self.connect() as connection:
             order = connection.execute(
@@ -2172,6 +2193,7 @@ class Database:
                 or order["delivery_status"] != "sending"
                 or order["message_sent_at"] is not None
                 or order["payment_status"] != "paid"
+                or order['manual_delivery_state']
             ):
                 return False
             if buyer_id is not None and buyer_id != order["buyer_id"]:
@@ -2920,6 +2942,8 @@ class Database:
             self._log(connection, "group_exemption_failed", order_id, {"has_error": True})
 
     def claim_order_delivery(self, order_id: str) -> bool:
+        if self.safe_mode or self.prepare_mode:
+            return False
         with self.connect() as connection:
             cursor = connection.execute(
                 """
@@ -2930,6 +2954,7 @@ class Database:
                   AND delivery_status IN ('pending', 'failed')
                   AND message_sent_at IS NULL
                   AND delivery_attempts < 3
+                  AND manual_delivery_state = ''
                 """,
                 (order_id,),
             )

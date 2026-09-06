@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .database import Database
 from .fulfillment_rules import parse_listing_id
-from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
+from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation, login_operation
 from .profile_lock import ProfileOwnerLock
 from .selection_bridge import (
     SelectionBridgeError,
@@ -210,7 +210,7 @@ class BrowserSessionManager:
             if acquired:
                 self._detail_lock.release()
 
-    @business_operation
+    @login_operation
     def profile_dir(self, account_id: int) -> Path:
         browser_name = (
             PureWindowsPath(str(self.browser_executable)).stem.lower()
@@ -219,7 +219,7 @@ class BrowserSessionManager:
         )
         return self.profiles_dir / browser_name / f"account-{account_id}"
 
-    @business_operation
+    @login_operation
     async def _launch_visible_browser(self, account_id: int) -> None:
         from playwright.async_api import async_playwright
 
@@ -255,7 +255,7 @@ class BrowserSessionManager:
             self._profile_lock = None
             raise
 
-    @business_operation
+    @login_operation
     async def _context_is_alive(self) -> bool:
         """Return whether the remembered browser context still has a live browser.
 
@@ -271,7 +271,7 @@ class BrowserSessionManager:
         except Exception:
             return False
 
-    @business_operation
+    @login_operation
     async def _ensure_live_page(self) -> None:
         """Point ``self._page`` at an open page, creating one when necessary."""
         if self._context is None:
@@ -332,7 +332,7 @@ class BrowserSessionManager:
                 await self._close_browser()
                 raise RuntimeError(f"启动专用浏览器失败：{exc}") from exc
 
-    @business_operation
+    @login_operation
     async def snapshot(self, account_id: int | None = None, *, inspect_live: bool = True) -> dict[str, object]:
         account = self.database.get_account(account_id) if account_id is not None else self.database.get_active_account()
         if account is None:
@@ -378,13 +378,13 @@ class BrowserSessionManager:
             "profile_security": "会话由独立浏览器配置目录保存；数据库不保存 Cookie 值",
         }
 
-    @business_operation
+    @login_operation
     async def start_login(self, account_id: int) -> dict[str, object]:
         async with self._lock:
             account = self.database.get_account(account_id)
             if account is None:
                 raise ValueError("账号不存在")
-            if not account["is_active"]:
+            if not account["is_active"] and self.runtime_policy.account_id != account_id:
                 raise ValueError("只能绑定当前账号")
             if self.browser_executable is None or not self.browser_executable.is_file():
                 self.database.update_account_binding(account_id, "error", error="没有找到 Chrome 或 Edge")
@@ -427,7 +427,7 @@ class BrowserSessionManager:
                 raise RuntimeError(f"启动扫码浏览器失败：{exc}") from exc
         return await self.snapshot(account_id)
 
-    @business_operation
+    @login_operation
     async def confirm_login(self, account_id: int) -> dict[str, object]:
         async with self._lock:
             if self._account_id != account_id or self._context is None:
@@ -441,7 +441,7 @@ class BrowserSessionManager:
             self._previous_status = "bound"
         return await self.snapshot(account_id, inspect_live=False)
 
-    @business_operation
+    @login_operation
     async def sync_session(self, account_id: int) -> dict[str, object]:
         """Refresh the in-memory handoff from the currently visible browser."""
         async with self._lock:
@@ -475,7 +475,7 @@ class BrowserSessionManager:
         self._handoff_storage_state = None
         return state
 
-    @business_operation
+    @login_operation
     async def cancel_login(self, account_id: int) -> dict[str, object]:
         async with self._lock:
             if self._account_id == account_id:
@@ -597,7 +597,7 @@ class BrowserSessionManager:
             if account_id is not None:
                 self.database.update_account_binding(account_id, restore)
 
-    @business_operation
+    @login_operation
     async def _detect_login(self) -> tuple[bool, str]:
         if self._context is None:
             return False, ""
@@ -615,7 +615,7 @@ class BrowserSessionManager:
         except Exception:
             return False, ""
 
-    @business_operation
+    @login_operation
     async def _monitor(self, account_id: int) -> None:
         try:
             while self._context is not None and self._account_id == account_id:

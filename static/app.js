@@ -582,11 +582,11 @@ async function loadProducts() {
   const [accountsResponse, productsResponse, listingsResponse] = await Promise.all([fetch("/api/accounts"), fetch("/api/products"), state.safeMode ? Promise.resolve(new Response("[]")) : fetch("/api/listings")]);
   if (!accountsResponse.ok || !productsResponse.ok || !listingsResponse.ok) throw new Error("读取商品失败");
   const accounts = await accountsResponse.json();
-  state.account = accounts.find((account) => account.is_active) || (state.safeMode ? null : accounts[0]) || null;
+  state.account = state.prepareMode ? accounts.find(a => a.id === state.runtimeAccountId) || null : accounts.find((account) => account.is_active) || (state.safeMode ? null : accounts[0]) || null;
   state.products = await productsResponse.json();
   state.listings = await listingsResponse.json();
   renderAutoReplyTestProducts();
-  el("accountName").textContent = state.account?.name || (state.safeMode ? "安全演练：未选定账号" : "七月账号");
+  el("accountName").textContent = state.account?.name || (state.prepareMode ? "准备环境：账号 ID 待核对" : state.safeMode ? "安全演练：未选定账号" : "七月账号");
   render();
 }
 
@@ -673,7 +673,7 @@ async function confirmShare(revoke = false) {
   if (Object.keys(editedFields()).length) { el("formError").textContent = "请先保存修改并重新打开，再核验当前资料"; return; }
   const dirName = el("editDirName").value;
   const response = await fetch(`/api/products/${encodeURIComponent(dirName)}${revoke ? "" : "/verify-share"}`, {
-    method: revoke ? "PATCH" : "POST", headers:{"Content-Type":"application/json"},
+    method: revoke ? "PATCH" : "POST", headers:{"Content-Type":"application/json", "X-Preparation-Action":"confirm-local"},
     body: JSON.stringify(revoke ? {share_verified:false} : {fingerprint:state.editFingerprint}),
   });
   if (!response.ok) { const result = await response.json(); el("formError").textContent = result.detail || "核验未完成"; return; }
@@ -685,7 +685,7 @@ async function saveEdit(event) {
   event.preventDefault();
   const dirName = el("editDirName").value;
   const payload = editedFields();
-  const response = await fetch(`/api/products/${encodeURIComponent(dirName)}`, {method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+  const response = await fetch(`/api/products/${encodeURIComponent(dirName)}`, {method:"PATCH", headers:{"Content-Type":"application/json", "X-Preparation-Action":"confirm-local"}, body:JSON.stringify(payload)});
   if (!response.ok) { const error = await response.json().catch(() => ({})); el("formError").textContent = error.detail || "保存失败"; return; }
   el("editDialog").close();
   await loadProducts();
@@ -831,7 +831,29 @@ el("autoReplyRecords").addEventListener("click", (event) => {
 async function initializePage() {
   const response = await fetch("/api/health");
   if (!response.ok) throw new Error("读取 API 状态失败");
-  state.safeMode = (await response.json()).safe_mode === true;
+  const health = await response.json();
+  state.prepareMode = health.mode === "prepare";
+  state.runtimeAccountId = health.runtime_account_id;
+  state.safeMode = health.safe_mode === true || state.prepareMode;
+  if (state.prepareMode) {
+    el('statusFilter').value = 'library';
+    await loadProducts();
+    document.querySelectorAll("button, input, select, textarea").forEach(node => { node.disabled = true; });
+    document.title = "闲鱼管理 · 准备模式（业务禁止）";
+    document.querySelector("h1").textContent = "云端准备环境 · 业务禁止";
+    document.querySelector(".eyebrow").textContent = "PREPARATION · NOT PRODUCTION";
+    el("sessionTitle").textContent = "准备模式，业务禁止";
+    el("sessionMessage").textContent = "未授权登录；本轮不扫码。确认登录也不会恢复业务。";
+    el("preparationPanel").hidden = false;
+    document.querySelector('main').prepend(el('preparationPanel'));
+    for (const id of ['deliveryTitle','autoReplyTitle','safetyTitle']) el(id).textContent = '准备模式：业务禁止';
+    for (const id of ['autoReplyPanel','autoReplyForm']) el(id).hidden = true;
+    el('startBinding').textContent = '真实登录未授权';
+    el('startupReport').textContent = '准备模式不执行业务启动检查或恢复任务。';
+    el('productsExplanation').textContent = '准备资料库；没有绑定运行账号时只读，不代表商品已可发货。';
+    await refreshPreparation();
+    return;
+  }
   if (state.safeMode) {
     await loadProducts();
     el("sessionTitle").textContent = "安全演练模式";
@@ -841,6 +863,41 @@ async function initializePage() {
   }
   await Promise.all([loadProducts(), loadSession(), loadDelivery(), loadAutoReply(true), loadSafety(true)]);
 }
+
+async function refreshPreparation() {
+  const health = await (await fetch('/api/health')).json();
+  state.runtimeAccountId = health.runtime_account_id;
+  el('preparationStatus').textContent = `模式：${health.mode}；账号：${health.runtime_account_id ?? '未绑定'}；可登录：${health.login_allowed ? '是（需人工操作）' : '否'}；可发送：否；出口：${health.egress.reason}；底层限制：${health.egress.enforcement_verified ? '已有验收记录' : '未验收'}`;
+  el('prepareRefresh').disabled = false;
+  for (const id of ['prepareLogin','prepareConfirm','prepareSync']) el(id).disabled = !health.login_allowed;
+  const bound = Number.isInteger(health.runtime_account_id);
+  el('manualReviewForm').querySelectorAll('input,select,button').forEach(n => { n.disabled = !bound; });
+  if (bound) {
+    const response = await fetch('/api/preparation/orders');
+    if (!response.ok) throw new Error('读取人工核对订单失败');
+    state.reviewOrders = await response.json();
+    el('reviewOrder').innerHTML = state.reviewOrders.map(o => `<option value="${escapeHtml(o.xianyu_order_id)}">${escapeHtml(o.xianyu_order_id)} · ${escapeHtml(o.delivery_status)} · ${escapeHtml(o.manual_delivery_state || '未人工核对')}</option>`).join('');
+    document.querySelectorAll('.edit-button, #editDialog input, #editDialog select, #editDialog button').forEach(n => { n.disabled = false; });
+  }
+}
+
+el('prepareRefresh').addEventListener('click', () => refreshPreparation().catch(e => {el('preparationMessage').textContent=e.message;}));
+for (const [id, action] of [['prepareLogin','start'],['prepareConfirm','confirm'],['prepareSync','sync']]) {
+  el(id).addEventListener('click', async () => {
+    const response = await fetch('/api/session/'+action, {method:'POST'});
+    el('preparationMessage').textContent = response.ok ? '登录操作完成；准备模式保持，业务仍禁止。' : '登录被拒绝或未完成，请核对准备状态。';
+    await refreshPreparation();
+  });
+}
+el('manualReviewForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const order = (state.reviewOrders || []).find(o => o.xianyu_order_id === el('reviewOrder').value);
+  if (!order) return;
+  const response = await fetch('/api/preparation/order-review', {method:'POST', headers:{'Content-Type':'application/json','X-Preparation-Action':'confirm-local'}, body:JSON.stringify({account_id:state.runtimeAccountId,order_id:order.xianyu_order_id,expected_fingerprint:order.fingerprint,action:el('reviewAction').value,platform_state:el('reviewPlatform').value,operator:el('reviewOperator').value,reason:el('reviewReason').value,evidence_ref:el('reviewEvidence').value})});
+  const result = await response.json();
+  el('preparationMessage').textContent = response.ok ? `已登记，未发送；资料编辑锁${result.delivery_material_unlock ? '已按核对结果解除' : '保持'}；自动重试未授权。` : `登记拒绝：${result.detail || '请刷新重核'}`;
+  await refreshPreparation();
+});
 
 initializePage().catch((error) => {
   el("productList").innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;

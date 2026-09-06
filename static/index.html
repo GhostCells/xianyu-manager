@@ -120,7 +120,7 @@
 
       <section class="workspace">
         <div class="section-heading">
-          <div><p class="eyebrow">PRODUCTS</p><h2>商品管理</h2><p>默认只看七月账号正在管理的商品；商品库旧品不会混进来。</p></div>
+          <div><p class="eyebrow">PRODUCTS</p><h2>商品管理</h2><p id="productsExplanation">默认展示当前运行账号的商品；全部商品库可单独查看。</p></div>
           <div class="toolbar">
             <input id="searchInput" type="search" placeholder="搜索商品名或标题" />
             <select id="statusFilter">
@@ -140,13 +140,34 @@
         <div class="orders-heading"><div><p class="eyebrow">DELIVERY</p><h2>最近发货记录</h2></div><span>订单号仅显示末 6 位</span></div>
         <div id="orderList" class="order-list"><p class="empty">暂无订单记录。</p></div>
       </section>
+      <section id="preparationPanel" hidden>
+        <h2>准备模式 · 业务禁止</h2>
+        <p id="preparationStatus"></p>
+        <p>此数据不是最终生产库。登录需另行授权；人工登记不触发发送，不代表平台在线验证。</p>
+        <button id="prepareRefresh" type="button">刷新准备状态</button>
+        <button id="prepareLogin" type="button" disabled>启动已授权的账号登录</button>
+        <button id="prepareConfirm" type="button" disabled>确认已授权的账号登录</button>
+        <button id="prepareSync" type="button" disabled>同步已授权的登录状态</button>
+        <form id="manualReviewForm">
+          <h3>订单人工核对</h3>
+          <p>证据只填私有记录编号，不填链接、提取码、聊天正文或敏感截图。</p>
+          <label>订单<select id="reviewOrder"></select></label>
+          <label>核对结果<select id="reviewAction"><option value="copied">仅复制交付文本</option><option value="confirmed_sent">人工确认已发送</option><option value="confirmed_not_sent">人工确认未发送（不授权重试）</option><option value="unknown">仍无法确认</option><option value="platform_only">仅登记平台状态</option></select></label>
+          <label>平台独立核对<select id="reviewPlatform"><option value="not_checked">未核对</option><option value="reported_confirmed">人工报告已确认</option><option value="reported_unconfirmed">人工报告未确认</option><option value="unknown">未知</option></select></label>
+          <label>操作者来源<input id="reviewOperator" required maxlength="80" /></label>
+          <label>核对原因<input id="reviewReason" required maxlength="500" /></label>
+          <label>私有证据编号<input id="reviewEvidence" required pattern="[A-Za-z0-9_.:-]+" maxlength="120" /></label>
+          <button id="submitReview" type="submit">登记核对结果（不发送）</button>
+        </form>
+        <p id="preparationMessage" role="status"></p>
+      </section>
     </main>
 
     <dialog id="editDialog">
       <form id="editForm" method="dialog">
         <div class="dialog-heading"><div><p class="eyebrow">商品配置</p><h2 id="dialogTitle"></h2></div><button type="button" class="icon-button" id="closeDialog" aria-label="关闭">×</button></div>
         <input type="hidden" id="editDirName" />
-        <label class="check account-enable"><input id="enabledForAccount" type="checkbox" /> 加入七月账号的日常管理</label>
+        <label class="check account-enable"><input id="enabledForAccount" type="checkbox" /> 加入运行账号的日常管理</label>
         <p id="legacyNotice" class="notice" hidden>这是历史归档商品，只保留在商品库中，不能重新加入当前账号。</p>
         <label>百度网盘地址<input id="shareUrl" type="url" placeholder="https://pan.baidu.com/s/..." /></label>
         <label>提取码<input id="shareCode" maxlength="16" placeholder="没有提取码可留空" /></label>

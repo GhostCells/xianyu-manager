@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 import secrets
 import subprocess
 from contextlib import asynccontextmanager
@@ -25,16 +26,19 @@ from .database import Database
 from .delivery import DeliveryService, listing_item_id
 from .fulfillment_rules import delivery_issues
 from .knowledge import load_knowledge_folder
+from .manual_review import list_review_orders, record_review
 from .scanner import scan_library
 from .security import SecretStore
-from .runtime_policy import RuntimePolicy
+from .runtime_policy import RuntimePolicy, RuntimeOperationBlocked, SafeModeOperationBlocked
 from .selection_bridge import SelectionBridgeError
 from .session import BrowserSessionManager, normalize_listing_url
 
 
 settings = load_settings()
-runtime_policy = RuntimePolicy(settings.safe_mode)
-database = Database(settings.database_path, safe_mode=settings.safe_mode)
+runtime_policy = RuntimePolicy(settings.safe_mode, settings.prepare_mode, settings.account_id,
+                               settings.login_authorized, settings.egress_status_path)
+database = Database(settings.database_path, safe_mode=settings.safe_mode,
+                    prepare_mode=settings.prepare_mode, runtime_account_id=settings.account_id)
 secret_store = SecretStore(settings.auto_reply_secret_path)
 session_manager = BrowserSessionManager(
     settings.browser_profiles_dir,
@@ -55,9 +59,9 @@ delivery_service = DeliveryService(
 
 def refresh_products() -> list[dict[str, object]]:
     scanned = scan_library(settings.product_library, settings.validator_path)
-    database.sync_products(scanned, safe_mode=runtime_policy.safe_mode)
-    if runtime_policy.safe_mode:
-        return database.list_products(allow_no_account=True)
+    database.sync_products(scanned, safe_mode=runtime_policy.safe_mode or runtime_policy.prepare_mode)
+    if runtime_policy.safe_mode or runtime_policy.managed:
+        return database.list_products(runtime_policy.account_id, allow_no_account=True)
     database.ensure_default_accounts()
     database.ensure_legacy_product_policy()
     account = database.enforce_single_account_mode("七月账号")
@@ -68,11 +72,26 @@ def refresh_products() -> list[dict[str, object]]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     refresh_products()
-    if not runtime_policy.safe_mode:
+    if runtime_policy.mode == 'normal':
         await delivery_service.start_if_enabled()
+    async def watch_egress():
+        while True:
+            await asyncio.sleep(2)
+            if runtime_policy.managed and not runtime_policy.egress_status()['ready']:
+                if delivery_service._task is not None or session_manager._context is not None:
+                    runtime_policy._state['egress_latched'] = True
+                    await delivery_service.shutdown()
+                    await session_manager.shutdown()
+    guard = asyncio.create_task(watch_egress()) if runtime_policy.managed and not runtime_policy.safe_mode else None
     try:
         yield
     finally:
+        if guard:
+            guard.cancel()
+            try:
+                await guard
+            except asyncio.CancelledError:
+                pass
         if not runtime_policy.safe_mode:
             await delivery_service.shutdown()
             await session_manager.shutdown()
@@ -80,6 +99,16 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="闲鱼本地管理系统", version="0.5.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
+
+
+@app.exception_handler(RuntimeOperationBlocked)
+async def runtime_blocked(_request, exc):
+    return JSONResponse(status_code=403, content={'error_code': exc.error_code, 'detail': str(exc)})
+
+
+@app.exception_handler(SafeModeOperationBlocked)
+async def safe_blocked(_request, exc):
+    return JSONResponse(status_code=403, content={'error_code': exc.error_code, 'detail': str(exc)})
 
 # Explicitly reviewed local reads only. In particular /api/session is NOT a
 # read-only route: its snapshot can restore bindings and inspect cookies.
@@ -101,6 +130,32 @@ async def local_request_guard(request: Request, call_next):
             "error_code": "SAFE_MODE_OPERATION_BLOCKED",
             "detail": runtime_policy.error_message,
         })
+
+    if runtime_policy.mode == 'prepare':
+        path = request.url.path
+        read_allowed = request.method in {'GET', 'HEAD'} and (
+            path in SAFE_READ_PATHS or path.startswith('/static/') or path == '/api/preparation/orders')
+        login_allowed = request.method == 'POST' and path in {
+            '/api/session/start', '/api/session/confirm', '/api/session/sync', '/api/session/cancel'}
+        review_allowed = request.method == 'POST' and path == '/api/preparation/order-review'
+        product_allowed = ((request.method == 'PATCH' and path.startswith('/api/products/') and path.count('/') == 3)
+                           or (request.method == 'POST' and path.startswith('/api/products/') and path.endswith('/verify-share')))
+        if not (read_allowed or login_allowed or review_allowed or product_allowed):
+            return JSONResponse(status_code=403, content={'detail': 'PREPARE_API_NOT_ALLOWED'})
+        if login_allowed:
+            try:
+                runtime_policy.require_login(runtime_policy.account_id)
+                if request.query_params.get('account_id') not in {None, str(runtime_policy.account_id)}:
+                    raise RuntimeOperationBlocked('RUNTIME_ACCOUNT_MISMATCH')
+                if request.headers.get('content-type', '').startswith('application/json'):
+                    body = await request.json()
+                    if isinstance(body, dict) and body.get('account_id', runtime_policy.account_id) != runtime_policy.account_id:
+                        raise RuntimeOperationBlocked('RUNTIME_ACCOUNT_MISMATCH')
+            except RuntimeError as exc:
+                return JSONResponse(status_code=403, content={'detail': str(exc)})
+        if review_allowed or product_allowed:
+            if runtime_policy.account_id is None or request.headers.get('X-Preparation-Action') != 'confirm-local':
+                return JSONResponse(status_code=403, content={'detail': 'PREPARATION_LOCAL_AUTH_REQUIRED'})
 
     if request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
         origin = str(request.headers.get("origin") or "").strip()
@@ -354,6 +409,9 @@ async def internal_selection_detail(
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
+    if runtime_policy.mode == 'prepare':
+        return {'status': 'ok', **runtime_policy.snapshot(), 'active_account': None,
+                'next_product_number': 0}
     if runtime_policy.safe_mode:
         products = database.list_products(allow_no_account=True)
         with database.connect() as connection:
@@ -361,7 +419,7 @@ def health() -> dict[str, object]:
                 "SELECT id FROM accounts WHERE is_active=1 AND is_archived=0"
             ).fetchone()
         return {
-            "status": "ok", "safe_mode": True, "automation_allowed": False,
+            "status": "ok", **runtime_policy.snapshot(), "automation_allowed": False,
             "product_library": str(settings.product_library),
             "database": str(settings.database_path),
             "active_account": database.get_account(int(row[0])) if row else None,
@@ -370,8 +428,7 @@ def health() -> dict[str, object]:
     products = database.list_products()
     return {
         "status": "ok",
-        "safe_mode": False,
-        "automation_allowed": True,
+        **runtime_policy.snapshot(),
         "product_library": str(settings.product_library),
         "database": str(settings.database_path),
         "active_account": database.get_active_account(),
@@ -400,6 +457,30 @@ def operation_selection_tracking(item_id: str) -> dict[str, object]:
 @app.get("/api/accounts")
 def accounts() -> list[dict[str, object]]:
     return database.list_accounts()
+
+
+class ManualOrderReview(BaseModel):
+    account_id: int = Field(gt=0)
+    order_id: str = Field(min_length=1, max_length=100)
+    expected_fingerprint: str = Field(pattern='^[0-9a-f]{64}$')
+    action: str
+    platform_state: str = 'not_checked'
+    operator: str = Field(min_length=1, max_length=80)
+    reason: str = Field(min_length=1, max_length=500)
+    evidence_ref: str = Field(pattern='^[A-Za-z0-9_.:-]{1,120}$')
+
+
+@app.get('/api/preparation/orders')
+def preparation_orders():
+    return list_review_orders(database, runtime_policy)
+
+
+@app.post('/api/preparation/order-review')
+def preparation_review(payload: ManualOrderReview):
+    try:
+        return record_review(database, runtime_policy, **payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/session")
@@ -433,6 +514,8 @@ async def confirm_session_binding() -> dict[str, object]:
 
 
 async def _resume_configured_automation(account_id: int) -> dict[str, object]:
+    if runtime_policy.mode != 'normal':
+        return {**delivery_service.snapshot(), 'automation_allowed': False}
     account = database.get_account(account_id) or {}
     auto_reply = database.get_auto_reply_settings(account_id)
     if account.get("delivery_enabled"):
@@ -738,6 +821,8 @@ def map_listing_product(
 
 @app.post("/api/accounts/{account_id}/activate")
 def activate_account(account_id: int) -> dict[str, object]:
+    if runtime_policy.managed:
+        raise RuntimeOperationBlocked('FIXED_RUNTIME_ACCOUNT_CANNOT_SWITCH')
     account = database.activate_account(account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="账号不存在")
@@ -746,7 +831,7 @@ def activate_account(account_id: int) -> dict[str, object]:
 
 @app.get("/api/products")
 def products() -> list[dict[str, object]]:
-    return database.list_products(allow_no_account=runtime_policy.safe_mode)
+    return database.list_products(runtime_policy.account_id, allow_no_account=runtime_policy.safe_mode or runtime_policy.prepare_mode)
 
 
 @app.post("/api/scan")

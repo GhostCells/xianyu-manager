@@ -22,6 +22,10 @@ class Settings:
     auto_reply_secret_path: Path
     selection_bridge_token_path: Path
     safe_mode: bool = False
+    prepare_mode: bool = False
+    account_id: int | None = None
+    login_authorized: bool = False
+    egress_status_path: Path | None = None
 
 
 def _parse_bool(value: str, *, name: str, default: bool) -> bool:
@@ -76,6 +80,7 @@ def _configured_path(environment_name: str, fallback: Path, *, kind: str) -> Pat
 
 def load_settings() -> Settings:
     safe_mode = read_safe_mode()
+    policy_options = read_runtime_options()
     manager_root = Path(__file__).resolve().parents[2]
     project_root = manager_root.parent
     data_dir_override = os.environ.get("XIANYU_MANAGER_DATA_DIR", "").strip()
@@ -113,6 +118,7 @@ def load_settings() -> Settings:
         auto_reply_secret_path=data_dir / "siliconflow-api-key.dpapi",
         selection_bridge_token_path=selection_bridge_token_path,
         safe_mode=safe_mode,
+        **policy_options,
     )
 
 
@@ -121,3 +127,19 @@ def read_safe_mode() -> bool:
         os.environ.get("XIANYU_MANAGER_SAFE_MODE", ""),
         name="XIANYU_MANAGER_SAFE_MODE", default=False,
     )
+
+
+def read_runtime_options() -> dict:
+    prepare = _parse_bool(os.environ.get('XIANYU_MANAGER_PREPARE_MODE', ''), name='XIANYU_MANAGER_PREPARE_MODE', default=False)
+    login = _parse_bool(os.environ.get('XIANYU_MANAGER_LOGIN_AUTHORIZED', ''), name='XIANYU_MANAGER_LOGIN_AUTHORIZED', default=False)
+    raw = os.environ.get('XIANYU_MANAGER_ACCOUNT_ID', '').strip()
+    if raw and (not raw.isascii() or not raw.isdigit() or int(raw) <= 0):
+        raise ValueError('XIANYU_MANAGER_ACCOUNT_ID must be a positive integer')
+    account = int(raw) if raw else None
+    if login and account is None:
+        raise ValueError('LOGIN_AUTHORIZED requires ACCOUNT_ID')
+    path = os.environ.get('XIANYU_MANAGER_EGRESS_STATUS_PATH', '').strip()
+    if path and not Path(path).is_absolute():
+        raise ValueError('EGRESS_STATUS_PATH must be absolute')
+    return dict(prepare_mode=prepare, account_id=account, login_authorized=login,
+                egress_status_path=Path(path) if path else None)
