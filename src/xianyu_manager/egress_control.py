@@ -176,6 +176,17 @@ def evaluate(approval, observation, latched, *, now, boot):
     return "EGRESS_READY"
 
 
+def offline_sandbox_namespace(proc):
+    """A nested Chromium sandbox may have only loopback, never an uplink.
+
+    Read through procfs as the trusted producer; no namespace switching or
+    trust in process names/command-line flags. Missing/racing evidence fails shut.
+    """
+    devices = (proc / 'net/dev').read_text().splitlines()[2:]
+    names = {line.split(':', 1)[0].strip() for line in devices if ':' in line}
+    return names == {'lo'}
+
+
 def runtime_verified():
     import pwd  # Linux updater only; keep legacy Windows policy imports portable.
 
@@ -198,9 +209,13 @@ def runtime_verified():
     uid = pwd.getpwnam("xianyu-runtime").pw_uid
     if uid in (0, pwd.getpwnam("ubuntu").pw_uid) or str(main) not in pids:
         return False
+    if (Path('/proc') / str(main) / 'ns/net').stat().st_ino != inode:
+        return False
     for pid in pids:
         proc = Path("/proc") / pid
-        if proc.stat().st_uid != uid or (proc / "ns/net").stat().st_ino != inode:
+        if proc.stat().st_uid != uid:
+            return False
+        if (proc / "ns/net").stat().st_ino != inode and not offline_sandbox_namespace(proc):
             return False
     return True
 

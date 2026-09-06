@@ -45,9 +45,11 @@ async def main():
                 for feature in ['PID namespaces', 'Network namespaces', 'Seccomp-BPF sandbox']:
                     assert re.search(re.escape(feature) + r'\s+Yes', text), text
                 # Sandboxed/non-dumpable processes deny /proc/ns reads to same UID.
-                # Query the real browser command line through its local CDP pipe.
-                cdp = await context.new_cdp_session(page)
-                args = (await cdp.send('Browser.getBrowserCommandLine'))['arguments']
+                # Use Chrome's own version page; this also works without enabling
+                # extra automation flags solely to make a CDP command available.
+                await page.goto('chrome://version')
+                import shlex
+                args = shlex.split(await page.locator('#command_line').inner_text())
                 assert not any(a in args for a in ['--no-sandbox', '--disable-setuid-sandbox'])
                 result['actual_command_line_has_no_sandbox_disable'] = True
             finally:

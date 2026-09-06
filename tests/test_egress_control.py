@@ -281,6 +281,18 @@ def test_import_does_not_require_unix_pwd_on_windows(monkeypatch):
     assert module.STATUS_SECONDS == 20
 
 
+def test_nested_namespace_must_have_only_loopback(tmp_path):
+    net = tmp_path / 'net'
+    net.mkdir()
+    dev = net / 'dev'
+    dev.write_text('header\nheader\n lo: 0 0 0\n')
+    assert control.offline_sandbox_namespace(tmp_path)
+    dev.write_text('header\nheader\n lo: 0 0 0\n eth0: 0 0 0\n')
+    assert not control.offline_sandbox_namespace(tmp_path)
+    dev.write_text('header\nheader\n')
+    assert not control.offline_sandbox_namespace(tmp_path)
+
+
 @pytest.mark.parametrize("script", ["apply-network.sh", "rollback-network.sh"])
 def test_network_scripts_refuse_before_commands_without_window(script, tmp_path):
     import subprocess
