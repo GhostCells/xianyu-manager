@@ -9,9 +9,8 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-from urllib.parse import parse_qs, urlparse
 
-from .fulfillment_rules import compose_delivery_message, registered_share_ready, matches_registered_listing
+from .fulfillment_rules import compose_delivery_message, matches_registered_listing, delivery_issues, parse_listing_id
 
 
 FORMAT_VERSION = "offline-fulfillment-v1"
@@ -22,7 +21,7 @@ NOTICE = (
 )
 FIELDS = {
     "accounts": "id",
-    "products": "dir_name number name title zip_hash share_url share_code share_verified share_needs_review quality_status",
+    "products": "dir_name number name title zip_hash zip_name zip_size quality_errors_json share_url share_code share_verified share_needs_review quality_status",
     "account_products": "account_id product_dir_name enabled listing_url listing_status",
     "account_listings": "account_id item_id matched_product_dir_name is_active",
 }
@@ -38,25 +37,7 @@ def _hash(path: Path) -> str:
 
 
 def _listing_id(url: str) -> str:
-    try:
-        parsed = urlparse(url)
-        ids = parse_qs(parsed.query).get("id", [])
-        if (parsed.scheme == "https" and parsed.netloc in {"www.goofish.com", "goofish.com"}
-                and len(ids) == 1 and ids[0].isdigit()):
-            return ids[0]
-    except ValueError:
-        pass
-    return ""
-
-
-def _share_syntax(url: str) -> bool:
-    try:
-        parsed = urlparse(url)
-        return (parsed.scheme == "https" and parsed.netloc.lower() == "pan.baidu.com"
-                and parsed.path.startswith("/s/") and len(parsed.path) > 3
-                and not any(char.isspace() for char in url))
-    except ValueError:
-        return False
+    return parse_listing_id(url)
 
 
 def read_catalog(database_path: Path, *, blocked_product_refs: tuple[str, ...] = ()) -> dict:
@@ -83,6 +64,9 @@ def read_catalog(database_path: Path, *, blocked_product_refs: tuple[str, ...] =
             # Deliberately do not SELECT *: knowledge, chat, buyers and secrets
             # are never read or exported.
             select = ",".join('"' + name + '"' for name in required.split())
+            if table == "products":
+                for name in ("verified_fingerprint", "share_verified_at"):
+                    select += ',' + ('"' + name + '"' if name in columns else 'NULL AS "' + name + '"')
             rows[table] = [dict(r) for r in connection.execute(f'SELECT {select} FROM "{table}" ORDER BY rowid')]
     finally:
         connection.close()
@@ -112,9 +96,7 @@ def read_catalog(database_path: Path, *, blocked_product_refs: tuple[str, ...] =
         if not item_id:
             reasons.append("LISTING_ID_UNCONFIRMED")
         else:
-            # Existing runtime uses substring matching. Require that exact
-            # runtime match set is unique as well as a valid parsed item id;
-            # reject prefix collisions conservatively without changing send.
+            # Share the online exact match predicate and reject ambiguity.
             matches = [b for b in bindings if b["account_id"] == binding["account_id"]
                        and matches_registered_listing({**b, "enabled_for_account": b["enabled"]}, item_id)]
             if len(matches) != 1:
@@ -139,32 +121,21 @@ def read_catalog(database_path: Path, *, blocked_product_refs: tuple[str, ...] =
     records = []
     problems = Counter()
     for ref, product in products.items():
-        reasons = []
-        if ref in blocked_product_refs:
-            reasons.append("OPERATOR_REPORTED_UNUSABLE")
-        if not product["share_url"]:
-            reasons.append("SHARE_MISSING")
-        if not product["share_verified"]:
-            reasons.append("SHARE_UNVERIFIED")
-        if product["share_needs_review"]:
-            reasons.append("SHARE_NEEDS_REVIEW")
-        if product["share_url"] and not _share_syntax(product["share_url"]):
-            reasons.append("SHARE_SYNTAX_INVALID")
-        if product["quality_status"] != "passed":
-            reasons.append("QUALITY_BLOCKED")
+        reasons = delivery_issues(product, operator_blocked=ref in blocked_product_refs)
         mappings = eligible_mappings.get(ref, [])
         if not mappings:
             reasons.append("ACCOUNT_MAPPING_MISSING")
         elif not any(not m["issues"] for m in mappings):
             reasons.append("NO_ELIGIBLE_LISTING_MAPPING")
-        ready = registered_share_ready(product) and not reasons
+        ready = not reasons
         problems.update(reasons)
         records.append({
             "record_ref": "product:" + ref, "product_ref": ref,
             "stable_product_id": None,
             "display_name": product["title"] or product["name"],
             "delivery_version_id": None, "zip_sha256": product["zip_hash"] or None,
-            "share_revision": None, "share_verified_at": None,
+            "share_revision": product.get("verified_fingerprint") or None,
+            "share_verified_at": product.get("share_verified_at"),
             "registered_share_verified": bool(product["share_verified"]),
             "share_needs_review": bool(product["share_needs_review"]),
             "online_status": "not_checked", "eligible_mappings": [m for m in mappings if not m["issues"]],

@@ -1,15 +1,101 @@
 """Pure share registration predicate and delivery text; no IO or runtime imports."""
 
+import hashlib
+import json
+import re
+from urllib.parse import parse_qs, urlparse
 
-def registered_share_ready(product: dict[str, object]) -> bool:
-    return bool(product.get("share_url") and product.get("share_verified")
-                and not product.get("share_needs_review"))
+
+def parse_listing_id(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        ids = parse_qs(parsed.query, keep_blank_values=True).get("id", [])
+        if (
+            parsed.scheme == "https"
+            and parsed.netloc in {"goofish.com", "www.goofish.com"}
+            and parsed.path in {"/item", "/item/"}
+            and len(ids) == 1
+            and re.fullmatch(r"[0-9]+", ids[0])
+            and not parsed.fragment
+        ):
+            return ids[0]
+    except (ValueError, TypeError):
+        pass
+    return ""
+
+
+def fulfillment_fingerprint(product: dict[str, object]) -> str:
+    values = [product.get(k) or "" for k in ("share_url", "share_code", "zip_hash")]
+    return hashlib.sha256(
+        json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def delivery_issues(
+    product: dict[str, object],
+    *,
+    require_verified: bool = True,
+    operator_blocked: bool = False,
+) -> list[str]:
+    from .scanner import delivery_blocking_errors
+
+    issues = []
+    url = str(product.get("share_url") or "")
+    try:
+        parsed = urlparse(url)
+        valid_url = (
+            parsed.scheme == "https"
+            and parsed.netloc.lower() == "pan.baidu.com"
+            and parsed.path.startswith("/s/")
+            and len(parsed.path) > 3
+            and not any(c.isspace() for c in url)
+        )
+    except ValueError:
+        valid_url = False
+    if not url:
+        issues.append("SHARE_MISSING")
+    elif not valid_url:
+        issues.append("SHARE_SYNTAX_INVALID")
+    if operator_blocked:
+        issues.append("OPERATOR_REPORTED_UNUSABLE")
+    if (
+        not product.get("zip_name")
+        or not re.fullmatch(r"[0-9a-f]{64}", str(product.get("zip_hash") or ""))
+        or not isinstance(product.get("zip_size"), int)
+        or product["zip_size"] <= 0
+    ):
+        issues.append("DELIVERY_PACKAGE_UNCONFIRMED")
+    errors = product.get("quality_errors")
+    if errors is None:
+        try:
+            errors = json.loads(str(product.get("quality_errors_json", "null")))
+        except ValueError:
+            errors = None
+    if (
+        product.get("quality_status") != "passed"
+        or not isinstance(errors, list)
+        or not all(isinstance(e, str) for e in errors)
+        or delivery_blocking_errors(errors)
+    ):
+        issues.append("QUALITY_BLOCKED")
+    if require_verified:
+        if not product.get("share_verified"):
+            issues.append("SHARE_UNVERIFIED")
+        if product.get("share_needs_review"):
+            issues.append("SHARE_NEEDS_REVIEW")
+        if product.get("verified_fingerprint") != fulfillment_fingerprint(product):
+            issues.append("VERIFICATION_VERSION_UNCONFIRMED")
+    return issues
 
 
 def matches_registered_listing(product: dict[str, object], item_id: str) -> bool:
-    """Existing runtime match semantics, intentionally preserved (see design)."""
-    return bool(product["enabled_for_account"] and product["listing_status"] == "published"
-                and f"id={item_id}" in str(product.get("listing_url") or ""))
+    """Exact supported URL and string ID, without redirects or network IO."""
+    return bool(
+        product["enabled_for_account"]
+        and product["listing_status"] == "published"
+        and item_id
+        and parse_listing_id(str(product.get("listing_url") or "")) == item_id
+    )
 
 
 def compose_delivery_message(product: dict[str, object]) -> str:

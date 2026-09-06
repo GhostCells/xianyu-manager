@@ -14,7 +14,7 @@ const escapeHtml = (value) => String(value ?? "")
 function productStage(product) {
   if (product.quality_status !== "passed") return "failed";
   if (!product.enabled_for_account) return "library";
-  if (!product.share_url || !product.share_verified || product.share_needs_review) return "needs_link";
+  if (!Array.isArray(product.delivery_issues) || product.delivery_issues.length) return "needs_link";
   if (product.listing_status === "published") return "published";
   return "ready";
 }
@@ -40,9 +40,8 @@ function badges(product) {
   if (!product.enabled_for_account) return `<span class="badge neutral">仅在商品库</span>${knowledgeBadge}`;
   result.push(product.quality_status === "passed" ? '<span class="badge ok">质检通过</span>' : '<span class="badge bad">质检失败</span>');
   result.push(knowledgeBadge);
-  if (product.share_needs_review) result.push('<span class="badge warn">交付包已变化</span>');
-  else if (product.share_url && product.share_verified) result.push('<span class="badge ok">网盘就绪</span>');
-  else result.push('<span class="badge warn">待配置网盘</span>');
+  if (Array.isArray(product.delivery_issues) && !product.delivery_issues.length) result.push('<span class="badge ok">交付资料已人工核验</span>');
+  else result.push('<span class="badge warn">交付资料待复核（非在线失效判定）</span>');
   if (product.listing_status === "published") result.push('<span class="badge blue">已上架</span>');
   else if (product.listing_status === "paused") result.push('<span class="badge neutral">已暂停</span>');
   else result.push('<span class="badge neutral">待上架</span>');
@@ -618,11 +617,13 @@ function openEdit(dirName) {
   el("legacyNotice").hidden = !legacyBlocked;
   el("shareUrl").value = product.share_url || "";
   el("shareCode").value = product.share_code || "";
-  el("shareVerified").checked = Boolean(product.share_verified && !product.share_needs_review);
+  el("shareVerificationStatus").textContent = product.delivery_issues?.length ? "待核验/修复：" + product.delivery_issues.join(", ") : "当前交付资料已人工核验（非在线检查）";
+  state.editFingerprint = product.fulfillment_fingerprint;
   el("suggestedPrice").value = centsToInput(product.suggested_price_cents);
   el("confirmedPrice").value = centsToInput(product.confirmed_price_cents);
   el("listingUrl").value = product.listing_url || "";
   el("listingStatus").value = product.listing_status;
+  state.editBaseline = readEditFields();
   renderKnowledgeEditor(product);
   el("formError").textContent = "";
   el("editDialog").showModal();
@@ -660,10 +661,30 @@ async function updateKnowledgeFolder(mode, button) {
   }
 }
 
+function readEditFields() {
+  return {enabled_for_account:el("enabledForAccount").checked, share_url:el("shareUrl").value || null, share_code:el("shareCode").value.trim(), suggested_price_cents:inputToCents(el("suggestedPrice").value), confirmed_price_cents:inputToCents(el("confirmedPrice").value), listing_url:el("listingUrl").value || null, listing_status:el("listingStatus").value};
+}
+
+function editedFields() {
+  return Object.fromEntries(Object.entries(readEditFields()).filter(([key, value]) => value !== state.editBaseline[key]));
+}
+
+async function confirmShare(revoke = false) {
+  if (Object.keys(editedFields()).length) { el("formError").textContent = "请先保存修改并重新打开，再核验当前资料"; return; }
+  const dirName = el("editDirName").value;
+  const response = await fetch(`/api/products/${encodeURIComponent(dirName)}${revoke ? "" : "/verify-share"}`, {
+    method: revoke ? "PATCH" : "POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(revoke ? {share_verified:false} : {fingerprint:state.editFingerprint}),
+  });
+  if (!response.ok) { const result = await response.json(); el("formError").textContent = result.detail || "核验未完成"; return; }
+  await loadProducts();
+  openEdit(dirName);
+}
+
 async function saveEdit(event) {
   event.preventDefault();
   const dirName = el("editDirName").value;
-  const payload = {enabled_for_account:el("enabledForAccount").checked, share_url:el("shareUrl").value || null, share_code:el("shareCode").value.trim(), share_verified:el("shareVerified").checked, suggested_price_cents:inputToCents(el("suggestedPrice").value), confirmed_price_cents:inputToCents(el("confirmedPrice").value), listing_url:el("listingUrl").value || null, listing_status:el("listingStatus").value};
+  const payload = editedFields();
   const response = await fetch(`/api/products/${encodeURIComponent(dirName)}`, {method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
   if (!response.ok) { const error = await response.json().catch(() => ({})); el("formError").textContent = error.detail || "保存失败"; return; }
   el("editDialog").close();
@@ -793,6 +814,8 @@ el("confirmBinding").addEventListener("click", () => sessionAction("confirm"));
 el("syncBinding").addEventListener("click", () => sessionAction("sync"));
 el("cancelBinding").addEventListener("click", () => sessionAction("cancel"));
 el("startDelivery").addEventListener("click", () => deliveryAction("start"));
+el("confirmShare").addEventListener("click", () => confirmShare(false));
+el("revokeShare").addEventListener("click", () => confirmShare(true));
 el("probeDelivery").addEventListener("click", () => deliveryAction("probe"));
 el("stopDelivery").addEventListener("click", () => deliveryAction("stop"));
 el("autoReplyForm").addEventListener("submit", saveAutoReply);

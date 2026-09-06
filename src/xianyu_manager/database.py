@@ -8,7 +8,14 @@ from typing import Iterator
 from urllib.parse import parse_qs, urlparse
 
 from .scanner import ScannedProduct
-from .fulfillment_rules import registered_share_ready, matches_registered_listing
+from .fulfillment_rules import (
+    matches_registered_listing,
+    fulfillment_fingerprint,
+    delivery_issues,
+    compose_delivery_message,
+    parse_listing_id,
+)
+import hashlib
 
 
 SELECTION_CANDIDATE_STATUSES = {
@@ -478,6 +485,7 @@ ACCOUNT_PRODUCT_FIELDS = {
 
 class Database:
     def __init__(self, path: Path, *, safe_mode: bool = False):
+        self.safe_mode = safe_mode
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
@@ -486,6 +494,14 @@ class Database:
             self._ensure_order_delivery_columns(connection)
             self._ensure_products_catalog_status_column(connection)
             self._ensure_product_knowledge_columns(connection)
+            for table, name, declaration in (
+                ("products", "verified_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+                ("products", "share_verified_at", "TEXT"),
+                ("orders", "fulfillment_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+                ("orders", "fulfillment_text_hash", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}:
+                    connection.execute(f'ALTER TABLE {table} ADD COLUMN {name} {declaration}')
             self._ensure_account_binding_columns(connection)
             self._ensure_account_delivery_columns(connection)
             self._ensure_account_listings_source_column(connection)
@@ -1602,11 +1618,14 @@ class Database:
 
     def sync_products(self, scanned: list[ScannedProduct], *, safe_mode: bool = False) -> None:
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             for product in scanned:
                 existing = connection.execute(
                     "SELECT zip_hash FROM products WHERE dir_name = ?", (product.dir_name,)
                 ).fetchone()
-                changed = bool(existing and existing["zip_hash"] and existing["zip_hash"] != product.zip_hash)
+                changed = bool(existing and existing["zip_hash"] != product.zip_hash)
+                if changed:
+                    self._require_no_pending_delivery(connection, product.dir_name)
                 connection.execute(
                     """
                     INSERT INTO products (
@@ -1638,9 +1657,11 @@ class Database:
                         quality_errors_json=excluded.quality_errors_json,
                         scanned_at=excluded.scanned_at,
                         share_needs_review=CASE
-                            WHEN products.zip_hash <> '' AND products.zip_hash <> excluded.zip_hash THEN 1
+                            WHEN products.zip_hash <> excluded.zip_hash THEN 1
                             ELSE products.share_needs_review
                         END,
+                        share_verified=CASE WHEN products.zip_hash <> excluded.zip_hash THEN 0 ELSE products.share_verified END,
+                        verified_fingerprint=CASE WHEN products.zip_hash <> excluded.zip_hash THEN '' ELSE products.verified_fingerprint END,
                         updated_at=CURRENT_TIMESTAMP
                     """,
                     (
@@ -1932,6 +1953,7 @@ class Database:
                     p.dir_name, p.number, p.name, p.title, p.knowledge_text,
                     p.knowledge_hash, p.knowledge_chars, p.knowledge_source_path,
                     p.knowledge_file_count, p.knowledge_updated_at, p.zip_name, p.zip_hash,
+                    p.verified_fingerprint, p.share_verified_at,
                     p.zip_size, p.image_count, p.quality_status, p.quality_errors_json,
                     p.scanned_at, p.share_url, p.share_code, p.share_verified,
                     p.share_needs_review, p.catalog_status, p.updated_at,
@@ -1953,6 +1975,8 @@ class Database:
         for row in rows:
             item = dict(row)
             item["quality_errors"] = json.loads(str(item.pop("quality_errors_json")))
+            item["fulfillment_fingerprint"] = fulfillment_fingerprint(item)
+            item["delivery_issues"] = delivery_issues(item)
             for key in ("share_verified", "share_needs_review", "enabled_for_account"):
                 item[key] = bool(item[key])
             result.append(item)
@@ -2017,20 +2041,174 @@ class Database:
                 self._log(connection, "product_knowledge_cleared", dir_name, {})
             return bool(cursor.rowcount)
 
+    @staticmethod
+    def _require_no_pending_delivery(connection, dir_name):
+        if connection.execute(
+            "SELECT 1 FROM orders WHERE product_dir_name=? AND delivery_status='sending' AND message_sent_at IS NULL",
+            (dir_name,),
+        ).fetchone():
+            raise ValueError("DELIVERY_IN_FLIGHT: 交付处理中或结果未明，先核对订单")
+
+    def confirm_product_share(self, dir_name: str, expected_fingerprint: str) -> None:
+        if self.safe_mode:
+            raise ValueError("SAFE_MODE_OPERATION_BLOCKED")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM products WHERE dir_name=?", (dir_name,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("PRODUCT_NOT_FOUND")
+            product = dict(row)
+            if expected_fingerprint != fulfillment_fingerprint(product):
+                raise ValueError("STALE_FULFILLMENT: 资料已变化，请重新打开核验")
+            issues = delivery_issues(product, require_verified=False)
+            if issues:
+                raise ValueError(",".join(issues))
+            self._require_no_pending_delivery(connection, dir_name)
+            connection.execute(
+                "UPDATE products SET share_verified=1,share_needs_review=0,verified_fingerprint=?,share_verified_at=CURRENT_TIMESTAMP WHERE dir_name=?",
+                (expected_fingerprint, dir_name),
+            )
+
+    @staticmethod
+    def _mapped_product(connection, account_id, item_id):
+        if account_id is None:
+            raise ValueError("explicit account_id required")
+        rows = connection.execute(
+            "SELECT p.*,ap.account_id,ap.enabled AS enabled_for_account,ap.listing_url AS bound_url,ap.listing_status AS bound_status FROM products p JOIN account_products ap ON ap.product_dir_name=p.dir_name WHERE ap.account_id=?",
+            (account_id,),
+        ).fetchall()
+        products = [
+            {
+                **dict(row),
+                "listing_url": row["bound_url"],
+                "listing_status": row["bound_status"],
+            }
+            for row in rows
+        ]
+        matches = [row for row in products if matches_registered_listing(row, item_id)]
+        if len(matches) != 1:
+            return None
+        product = matches[0]
+        snapshots = connection.execute(
+            "SELECT matched_product_dir_name,is_active FROM account_listings WHERE account_id=? AND item_id=?",
+            (account_id, item_id),
+        ).fetchall()
+        if any(
+            not row["is_active"]
+            or row["matched_product_dir_name"] != product["dir_name"]
+            for row in snapshots
+        ):
+            return None
+        return product
+
+    @staticmethod
+    def _account_can_deliver(connection, account_id, chat_id):
+        account = connection.execute(
+            "SELECT * FROM accounts WHERE id=?", (account_id,)
+        ).fetchone()
+        return bool(
+            account
+            and account["is_active"]
+            and not account["is_archived"]
+            and account["binding_status"] == "bound"
+            and account["delivery_enabled"]
+            and not connection.execute(
+                "SELECT 1 FROM chat_sessions WHERE account_id=? AND chat_id=? AND manual_takeover_until>CURRENT_TIMESTAMP",
+                (account_id, chat_id),
+            ).fetchone()
+        )
+
+    def claim_verified_delivery(
+        self, order_id: str, account_id: int, item_id: str
+    ) -> dict | None:
+        if self.safe_mode:
+            raise ValueError("SAFE_MODE_OPERATION_BLOCKED")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            order = connection.execute(
+                "SELECT * FROM orders WHERE xianyu_order_id=?", (order_id,)
+            ).fetchone()
+            product = self._mapped_product(connection, account_id, item_id)
+            if (
+                not order
+                or not product
+                or order["account_id"] != account_id
+                or order["listing_item_id"] != item_id
+                or order["product_dir_name"] != product["dir_name"]
+                or delivery_issues(product)
+                or not self._account_can_deliver(
+                    connection, account_id, order["chat_id"]
+                )
+            ):
+                return None
+            message = compose_delivery_message(product)
+            fingerprint = fulfillment_fingerprint(product)
+            claimed = connection.execute(
+                "UPDATE orders SET delivery_status='sending',delivery_attempts=delivery_attempts+1,fulfillment_fingerprint=?,fulfillment_text_hash=?,updated_at=CURRENT_TIMESTAMP WHERE xianyu_order_id=? AND account_id=? AND payment_status='paid' AND delivery_status IN ('pending','failed') AND message_sent_at IS NULL AND delivery_attempts<3",
+                (
+                    fingerprint,
+                    hashlib.sha256(message.encode()).hexdigest(),
+                    order_id,
+                    account_id,
+                ),
+            ).rowcount
+            return {"message": message, "fingerprint": fingerprint} if claimed else None
+
+    def validate_delivery_claim(
+        self, order_id, account_id, chat_id, text, *, buyer_id=None
+    ):
+        if self.safe_mode:
+            return False
+        with self.connect() as connection:
+            order = connection.execute(
+                "SELECT * FROM orders WHERE xianyu_order_id=?", (order_id,)
+            ).fetchone()
+            if (
+                not order
+                or order["account_id"] != account_id
+                or order["chat_id"] != chat_id
+                or order["delivery_status"] != "sending"
+                or order["message_sent_at"] is not None
+                or order["payment_status"] != "paid"
+            ):
+                return False
+            if buyer_id is not None and buyer_id != order["buyer_id"]:
+                return False
+            product = self._mapped_product(
+                connection, account_id, order["listing_item_id"]
+            )
+            return bool(
+                product
+                and product['dir_name'] == order['product_dir_name']
+                and not delivery_issues(product)
+                and fulfillment_fingerprint(product) == order["fulfillment_fingerprint"]
+                and hashlib.sha256(text.encode()).hexdigest()
+                == order["fulfillment_text_hash"]
+                and self._account_can_deliver(connection, account_id, chat_id)
+            )
+
     def update_product(
         self, dir_name: str, fields: dict[str, object], account_id: int | None = None
     ) -> dict[str, object] | None:
         if account_id is None:
             account_id = int(self.get_active_account()["id"])
         global_updates = {key: value for key, value in fields.items() if key in GLOBAL_PRODUCT_FIELDS}
+        for key in ("share_url", "share_code"):
+            if key in global_updates and global_updates[key] is None:
+                global_updates[key] = ""
+        if global_updates.get("share_verified", False) is None:
+            global_updates.pop("share_verified")
         account_updates = {key: value for key, value in fields.items() if key in ACCOUNT_PRODUCT_FIELDS}
         wants_enable = account_updates.get("enabled_for_account") is True
         if "enabled_for_account" in account_updates:
             account_updates["enabled"] = account_updates.pop("enabled_for_account")
 
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             exists = connection.execute(
-                "SELECT catalog_status FROM products WHERE dir_name = ?", (dir_name,)
+                "SELECT * FROM products WHERE dir_name = ?", (dir_name,)
             ).fetchone()
             if exists is None:
                 return None
@@ -2046,8 +2224,13 @@ class Database:
             if wants_enable and exists["catalog_status"] == "legacy" and not already_enabled:
                 raise ValueError("旧账号历史商品不能加入其他账号")
 
+            changed = any(k in global_updates and global_updates[k] != exists[k] for k in ("share_url", "share_code"))
+            if changed or account_updates or global_updates.get("share_verified") is False:
+                self._require_no_pending_delivery(connection, dir_name)
             if global_updates.get("share_verified"):
-                global_updates["share_needs_review"] = 0
+                global_updates.pop("share_verified")  # confirmation is a separate compare-and-set operation
+            if changed or global_updates.get("share_verified") is False:
+                global_updates.update(share_verified=0, share_needs_review=1, verified_fingerprint="")
             if global_updates:
                 assignments = ", ".join(f"{key} = ?" for key in global_updates)
                 values = [int(value) if isinstance(value, bool) else value for value in global_updates.values()]
@@ -2082,14 +2265,13 @@ class Database:
     def get_product_by_listing_item_id(
         self, item_id: str, account_id: int | None = None
     ) -> dict[str, object] | None:
-        normalized = str(item_id or "").strip()
+        if account_id is None:
+            raise ValueError("explicit account_id required")
+        normalized = str(item_id or "")
         if not normalized:
             return None
-        matches = []
-        for product in self.list_products(account_id, include_listing_only=True):
-            if matches_registered_listing(product, normalized):
-                matches.append(product)
-        return matches[0] if len(matches) == 1 else None
+        with self.connect() as connection:
+            return self._mapped_product(connection, account_id, normalized)
 
     def configure_listing_delivery(
         self,
@@ -2097,8 +2279,8 @@ class Database:
         item_id: str,
         *,
         share_url: str,
-        share_code: str = "",
-        share_verified: bool = True,
+        share_code: str | None = None,
+        share_verified: bool | None = None,
     ) -> dict[str, object]:
         normalized_item_id = str(item_id or "").strip()
         normalized_url = str(share_url or "").strip()
@@ -2111,6 +2293,15 @@ class Database:
 
         synthetic_dir = f"__listing__{normalized_item_id}"
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_no_pending_delivery(connection, synthetic_dir)
+            previous = connection.execute("SELECT * FROM products WHERE dir_name=?", (synthetic_dir,)).fetchone()
+            if connection.execute("SELECT 1 FROM account_products WHERE product_dir_name=? AND account_id<>?", (synthetic_dir, account_id)).fetchone():
+                raise ValueError("LISTING_DELIVERY_ACCOUNT_CONFLICT")
+            if share_code is None and previous:
+                normalized_code = previous['share_code']
+            unchanged = previous and previous['share_url']==normalized_url and previous['share_code']==normalized_code
+            share_verified = bool(unchanged and previous['share_verified'] and share_verified is not False)
             listing = connection.execute(
                 """
                 SELECT title, listing_url, price_cents
@@ -2130,16 +2321,15 @@ class Database:
                     share_url, share_code, share_verified, share_needs_review,
                     catalog_status, updated_at
                 ) VALUES (?, 0, ?, ?, '', '', 0, 0, 'passed', '[]',
-                          CURRENT_TIMESTAMP, ?, ?, ?, 0, 'listing_only', CURRENT_TIMESTAMP)
+                          CURRENT_TIMESTAMP, ?, ?, ?, 1, 'listing_only', CURRENT_TIMESTAMP)
                 ON CONFLICT(dir_name) DO UPDATE SET
                     name=excluded.name,
                     title=excluded.title,
-                    quality_status='passed',
-                    quality_errors_json='[]',
                     share_url=excluded.share_url,
                     share_code=excluded.share_code,
                     share_verified=excluded.share_verified,
-                    share_needs_review=0,
+                    share_needs_review=CASE WHEN products.share_url<>excluded.share_url OR products.share_code<>excluded.share_code OR excluded.share_verified=0 THEN 1 ELSE products.share_needs_review END,
+                    verified_fingerprint=CASE WHEN products.share_url<>excluded.share_url OR products.share_code<>excluded.share_code OR excluded.share_verified=0 THEN '' ELSE products.verified_fingerprint END,
                     catalog_status='listing_only',
                     updated_at=CURRENT_TIMESTAMP
                 """,
@@ -2361,13 +2551,7 @@ class Database:
             ).fetchone()
             if configured is not None:
                 configured_url = str(configured["listing_url"] or "").strip()
-                configured_item_id = ""
-                try:
-                    configured_item_id = parse_qs(urlparse(configured_url).query).get(
-                        "id", [""]
-                    )[0].strip()
-                except Exception:
-                    configured_item_id = ""
+                configured_item_id = parse_listing_id(configured_url)
                 if (
                     configured_item_id
                     and configured_item_id != normalized_item_id
@@ -2454,13 +2638,8 @@ class Database:
             merged_count = 0
             for row in configured:
                 listing_url = str(row["listing_url"] or "").strip()
-                parsed = urlparse("")
-                try:
-                    parsed = urlparse(listing_url)
-                    item_id = parse_qs(parsed.query).get("id", [""])[0].strip()
-                except Exception:
-                    item_id = ""
-                if parsed.netloc not in {"www.goofish.com", "goofish.com"} or not item_id.isdigit():
+                item_id = parse_listing_id(listing_url)
+                if not item_id:
                     continue
                 product_dir = str(row["product_dir_name"])
                 active_dirs.add(product_dir)
@@ -2536,6 +2715,7 @@ class Database:
                     l.is_active, l.synced_at,
                     p.name AS product_name, p.share_url, p.share_code,
                     p.share_verified, p.share_needs_review, p.quality_status,
+                    p.zip_name,p.zip_hash,p.zip_size,p.quality_errors_json,p.verified_fingerprint,
                     p.knowledge_hash, p.knowledge_chars
                 FROM account_listings l
                 LEFT JOIN products p ON p.dir_name = l.matched_product_dir_name
@@ -2551,7 +2731,7 @@ class Database:
                 item[key] = bool(item.get(key))
             item["delivery_ready"] = bool(
                 item.get("matched_product_dir_name")
-                and registered_share_ready(item)
+                and not delivery_issues(item)
             )
             result.append(item)
         return result
@@ -2568,6 +2748,23 @@ class Database:
         event_fingerprint: str,
     ) -> dict[str, object]:
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                "SELECT account_id,product_dir_name,listing_item_id,buyer_id,chat_id FROM orders WHERE xianyu_order_id=?",
+                (order_id,),
+            ).fetchone()
+            if previous and (
+                previous["account_id"] != account_id
+                or previous["product_dir_name"] != product_dir_name
+                or previous["listing_item_id"] != listing_item_id
+                or (
+                    previous["buyer_id"]
+                    and buyer_id
+                    and previous["buyer_id"] != buyer_id
+                )
+                or (previous["chat_id"] and chat_id and previous["chat_id"] != chat_id)
+            ):
+                raise ValueError("ORDER_ACCOUNT_OR_MAPPING_CONFLICT")
             connection.execute(
                 """
                 INSERT INTO orders (
@@ -2619,6 +2816,23 @@ class Database:
         event_fingerprint: str,
     ) -> dict[str, object]:
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            previous = connection.execute(
+                "SELECT account_id,product_dir_name,listing_item_id,buyer_id,chat_id FROM orders WHERE xianyu_order_id=?",
+                (order_id,),
+            ).fetchone()
+            if previous and (
+                previous["account_id"] != account_id
+                or previous["product_dir_name"] != product_dir_name
+                or previous["listing_item_id"] != listing_item_id
+                or (
+                    previous["buyer_id"]
+                    and buyer_id
+                    and previous["buyer_id"] != buyer_id
+                )
+                or (previous["chat_id"] and chat_id and previous["chat_id"] != chat_id)
+            ):
+                raise ValueError("ORDER_ACCOUNT_OR_MAPPING_CONFLICT")
             connection.execute(
                 """
                 INSERT INTO orders (

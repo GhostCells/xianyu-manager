@@ -23,6 +23,7 @@ from .auto_reply import (
 from .config import load_settings
 from .database import Database
 from .delivery import DeliveryService, listing_item_id
+from .fulfillment_rules import delivery_issues
 from .knowledge import load_knowledge_folder
 from .scanner import scan_library
 from .security import SecretStore
@@ -194,8 +195,8 @@ class AutomationSafetyUpdate(BaseModel):
 
 class ListingDeliveryUpdate(BaseModel):
     share_url: HttpUrl
-    share_code: str = Field(default="", max_length=16)
-    share_verified: bool = True
+    share_code: str | None = Field(default=None, max_length=16)
+    share_verified: bool | None = None
 
     @model_validator(mode="after")
     def validate_baidu_share(self) -> "ListingDeliveryUpdate":
@@ -473,9 +474,7 @@ def delivery_status() -> dict[str, object]:
         bool(
             item.get("enabled_for_account")
             and item.get("listing_status") == "published"
-            and item.get("share_url")
-            and item.get("share_verified")
-            and not item.get("share_needs_review")
+            and not delivery_issues(item)
             and listing_item_id(str(item.get("listing_url") or ""))
         )
         for item in database.list_products(int(account["id"]))
@@ -912,7 +911,7 @@ async def detect_product_listing(dir_name: str) -> dict[str, object]:
         raise HTTPException(status_code=409, detail="该商品尚未加入当前账号")
     if current["quality_status"] != "passed":
         raise HTTPException(status_code=409, detail="商品质检未通过，不能进行发布检测")
-    if not current["share_url"] or not current["share_verified"] or current["share_needs_review"]:
+    if delivery_issues(current):
         raise HTTPException(status_code=409, detail="请先完成百度网盘链接验证")
 
     account = database.get_active_account()
@@ -938,6 +937,19 @@ async def detect_product_listing(dir_name: str) -> dict[str, object]:
     return result
 
 
+class ShareConfirmation(BaseModel):
+    fingerprint: str = Field(pattern="^[0-9a-f]{64}$")
+
+
+@app.post("/api/products/{dir_name}/verify-share")
+def verify_share(dir_name: str, payload: ShareConfirmation) -> dict[str, object]:
+    try:
+        database.confirm_product_share(Path(unquote(dir_name)).name, payload.fingerprint)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "verification_method": "user_confirmation", "online_checked": False}
+
+
 @app.patch("/api/products/{dir_name}")
 def update_product(dir_name: str, payload: ProductUpdate) -> dict[str, object]:
     fields = payload.model_dump(exclude_unset=True)
@@ -947,9 +959,6 @@ def update_product(dir_name: str, payload: ProductUpdate) -> dict[str, object]:
     current = database.get_product(Path(unquote(dir_name)).name)
     if current is None:
         raise HTTPException(status_code=404, detail="商品不存在")
-    effective_share_url = fields.get("share_url", current["share_url"])
-    if fields.get("share_verified") is True and not effective_share_url:
-        raise HTTPException(status_code=422, detail="验证分享链接前，请先填写百度网盘链接")
     try:
         updated = database.update_product(Path(unquote(dir_name)).name, fields)
     except ValueError as exc:

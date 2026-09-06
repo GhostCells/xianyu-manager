@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .database import Database
+from .fulfillment_rules import parse_listing_id
 from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
 from .profile_lock import ProfileOwnerLock
 from .selection_bridge import (
@@ -25,12 +26,8 @@ MESSAGE_SESSION_COOKIE_NAMES = {"cookie2", "_tb_token_"}
 
 
 def normalize_listing_url(raw_url: str) -> tuple[str, str] | None:
-    try:
-        parsed = urlparse(raw_url)
-        item_id = parse_qs(parsed.query).get("id", [""])[0].strip()
-    except Exception:
-        return None
-    if parsed.netloc not in {"www.goofish.com", "goofish.com"} or not item_id:
+    item_id = parse_listing_id(raw_url)
+    if not item_id:
         return None
     normalized = urlunparse(("https", "www.goofish.com", "/item", "", urlencode({"id": item_id}), ""))
     return item_id, normalized

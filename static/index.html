@@ -150,7 +150,9 @@
         <p id="legacyNotice" class="notice" hidden>这是历史归档商品，只保留在商品库中，不能重新加入当前账号。</p>
         <label>百度网盘地址<input id="shareUrl" type="url" placeholder="https://pan.baidu.com/s/..." /></label>
         <label>提取码<input id="shareCode" maxlength="16" placeholder="没有提取码可留空" /></label>
-        <label class="check"><input id="shareVerified" type="checkbox" /> 已打开并确认网盘地址可用</label>
+        <p id="shareVerificationStatus"></p>
+        <button id="confirmShare" type="button">我已人工核验当前交付资料</button>
+        <button id="revokeShare" type="button">撤销分享核验</button>
         <section class="knowledge-editor" aria-labelledby="knowledgeEditorTitle">
           <div class="knowledge-editor-heading">
             <div><strong id="knowledgeEditorTitle">自动回复资料库</strong><small id="knowledgeStatus">尚未载入资料</small></div>

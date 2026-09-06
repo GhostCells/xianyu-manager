@@ -70,7 +70,7 @@ def test_health_and_products():
         assert cross_site.status_code == 403
 
 
-def test_verified_share_requires_url():
+def test_ordinary_save_can_clear_url_but_cannot_verify():
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         products = client.get("/api/products").json()
         dir_name = products[0]["dir_name"]
@@ -78,7 +78,8 @@ def test_verified_share_requires_url():
             f"/api/products/{dir_name}",
             json={"share_url": None, "share_verified": True},
         )
-        assert response.status_code == 422
+        assert response.status_code == 200
+        assert response.json()['share_verified'] is False
 
 
 def test_scan_reports_remote_listing_refresh(monkeypatch):

@@ -124,6 +124,7 @@ def test_all_non_allowlisted_routes_block_before_validation(rehearsal):
     ("delivery", "_read_profile_cookies"), ("delivery", "_fetch_im_token"),
     ("delivery", "_post_mtop"), ("delivery", "_send_json"),
     ("delivery", "_process_chat_event"), ("delivery", "_recover_recent_paid_orders"),
+    ("delivery", "retry_platform_confirmation"), ("delivery", "_guarded_send_text"),
 ])
 def test_direct_business_entries_reject_before_arguments_or_io(rehearsal, owner, name):
     db, session, delivery = rehearsal

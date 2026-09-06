@@ -35,8 +35,8 @@ def test_sync_and_update_product(tmp_path):
         },
     )
     assert updated is not None
-    assert updated["share_verified"] is True
-    assert updated["share_needs_review"] is False
+    assert updated["share_verified"] is False
+    assert updated["share_needs_review"] is True
     assert updated["knowledge_text"] == ""
     assert updated["knowledge_chars"] == 0
 
@@ -199,7 +199,7 @@ def test_live_inventory_sync_keeps_explicit_matches_and_unmatched_items(tmp_path
 
     assert len(rows) == 2
     matched = next(item for item in rows if item["item_id"] == "123456789")
-    assert matched["delivery_ready"] is True
+    assert matched["delivery_ready"] is False  # ordinary save is not confirmation
     assert matched["matched_product_dir_name"] == "01-测试商品"
     assert next(item for item in rows if item["item_id"] == "987654321")["delivery_ready"] is False
 
@@ -264,7 +264,7 @@ def test_incomplete_local_product_can_be_mapped_but_is_not_delivery_ready(tmp_pa
     assert mapped["delivery_ready"] is False
 
 
-def test_verified_link_is_delivery_ready_even_when_local_quality_failed(tmp_path):
+def test_quality_failed_blocks_delivery_even_with_registered_link(tmp_path):
     database = Database(tmp_path / "manager.db")
     database.sync_products([product(quality_status="failed")])
     database.ensure_default_accounts()
@@ -294,7 +294,7 @@ def test_verified_link_is_delivery_ready_even_when_local_quality_failed(tmp_path
 
     listing = database.list_live_listings(account_id)[0]
     assert listing["quality_status"] == "failed"
-    assert listing["delivery_ready"] is True
+    assert listing["delivery_ready"] is False
 
 
 def test_configured_published_listing_is_safely_merged_without_hiding_snapshot(tmp_path):
@@ -512,7 +512,7 @@ def test_unmatched_live_listing_can_receive_an_isolated_delivery_profile(tmp_pat
         share_verified=True,
     )
 
-    assert configured["delivery_ready"] is True
+    assert configured["delivery_ready"] is False  # listing-only package remains unconfirmed
     assert configured["share_code"] == "9r1v"
     assert configured["matched_product_dir_name"] == "__listing__1068279950541"
     assert all(

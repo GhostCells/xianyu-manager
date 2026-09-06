@@ -151,7 +151,7 @@ def test_live_listing_snapshot_prefers_existing_ids_and_uniquely_matches_new_tit
 
     assert len(snapshot) == 2
     assert snapshot[0]["matched_product_dir_name"] == "12-AI漫剧制作工作流Skill"
-    assert snapshot[1]["matched_product_dir_name"] == "24-AI漫剧分镜表生成器"
+    assert snapshot[1]["matched_product_dir_name"] is None  # title similarity cannot register fulfillment
     assert snapshot[1]["price_cents"] == 19_900
     assert snapshot[1]["url"] == "https://www.goofish.com/item?id=1088888888888"
 

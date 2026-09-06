@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from difflib import SequenceMatcher
 import hashlib
 import json
 import random
@@ -27,7 +26,7 @@ from .auto_reply import (
     manual_review_reason,
 )
 from .database import Database
-from .fulfillment_rules import compose_delivery_message
+from .fulfillment_rules import compose_delivery_message, delivery_issues, parse_listing_id
 from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
 from .notifications import WindowsNotifier
 from .security import SecretStore
@@ -417,10 +416,7 @@ def is_recoverable_order(order: dict[str, object], *, now: float | None = None) 
 
 
 def listing_item_id(listing_url: str) -> str:
-    try:
-        return parse_qs(urlparse(listing_url).query).get("id", [""])[0].strip()
-    except Exception:
-        return ""
+    return parse_listing_id(listing_url)
 
 
 def normalize_listing_match_text(value: object) -> str:
@@ -448,80 +444,19 @@ def listing_title_from_text(value: object) -> str:
     return " ".join(str(value or "").split())[:160]
 
 
-def _candidate_product_match(
-    *,
-    title: str,
-    text: str,
-    products: list[dict[str, object]],
-    consumed_dirs: set[str],
-) -> str | None:
-    remote_title = normalize_listing_match_text(title)
-    remote_text = normalize_listing_match_text(text)
-    exact_dirs: set[str] = set()
-    for product in products:
-        dir_name = str(product.get("dir_name") or "").strip()
-        if not dir_name or dir_name in consumed_dirs:
-            continue
-        if listing_item_id(str(product.get("listing_url") or "")):
-            continue
-        labels = {
-            normalize_listing_match_text(product.get("title")),
-            normalize_listing_match_text(product.get("name")),
-            normalize_listing_match_text(re.sub(r"^\d+-", "", dir_name)),
-        }
-        if remote_title and remote_title in labels:
-            exact_dirs.add(dir_name)
-    if len(exact_dirs) == 1:
-        return next(iter(exact_dirs))
-    if len(remote_title) < 6:
-        return None
-    scored: list[tuple[float, str]] = []
-    for product in products:
-        dir_name = str(product.get("dir_name") or "").strip()
-        if not dir_name or dir_name in consumed_dirs:
-            continue
-        if listing_item_id(str(product.get("listing_url") or "")):
-            continue
-        labels = {
-            normalize_listing_match_text(product.get("title")),
-            normalize_listing_match_text(product.get("name")),
-            normalize_listing_match_text(re.sub(r"^\d+-", "", dir_name)),
-        }
-        labels.discard("")
-        best = 0.0
-        for label in labels:
-            if len(label) < 4:
-                continue
-            if label in remote_text or (len(remote_title) >= 6 and remote_title in label):
-                ratio = min(len(label), len(remote_text)) / max(len(label), len(remote_text), 1)
-                best = max(best, 0.9 + min(0.09, ratio * 0.09))
-            if remote_title:
-                best = max(best, SequenceMatcher(None, label, remote_title).ratio())
-        if best:
-            scored.append((best, dir_name))
-    if not scored:
-        return None
-    scored.sort(reverse=True)
-    best_score, best_dir = scored[0]
-    second_score = scored[1][0] if len(scored) > 1 else 0.0
-    if best_score < 0.78 or best_score - second_score < 0.08:
-        return None
-    return best_dir
-
-
 def build_live_listing_snapshot(
     raw_items: list[dict[str, object]],
     products: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     """Normalize a profile-page scrape and apply only unique product matches."""
-    explicit_matches = {
-        listing_item_id(str(product.get("listing_url") or "")): str(product.get("dir_name") or "")
-        for product in products
-        if listing_item_id(str(product.get("listing_url") or ""))
-    }
+    candidates = {}
+    for product in products:
+        identity = listing_item_id(str(product.get("listing_url") or ""))
+        if identity:
+            candidates.setdefault(identity, []).append(str(product.get("dir_name") or ""))
+    explicit_matches = {key: values[0] for key, values in candidates.items() if len(values) == 1}
     result: list[dict[str, object]] = []
     seen_ids: set[str] = set()
-    consumed_dirs: set[str] = set(explicit_matches.values())
     for raw in raw_items:
         raw_url = str(raw.get("url") or "").strip()
         parsed = urlparse(raw_url)
@@ -537,15 +472,6 @@ def build_live_listing_snapshot(
         text = str(raw.get("text") or "").strip()[:1000]
         title = str(raw.get("title") or "").strip()[:160] or listing_title_from_text(text)
         matched = explicit_matches.get(item_id)
-        if not matched:
-            matched = _candidate_product_match(
-                title=title,
-                text=text,
-                products=products,
-                consumed_dirs=consumed_dirs,
-            )
-        if matched:
-            consumed_dirs.add(matched)
         result.append(
             {
                 "item_id": item_id,
@@ -744,6 +670,10 @@ class DeliveryService:
         ):
             raise RuntimeError("自动发货监听尚未连接，暂时不能补偿发货")
 
+        existing = self.database.get_order(normalized_order_id)
+        if existing and existing.get("delivery_status") == "confirm_pending":
+            await self.retry_platform_confirmation(normalized_order_id, account_id, cookie_map)
+            return {"order": self.database.get_order(normalized_order_id), "delivery": self.snapshot()}
         preview = await self._fetch_recent_sold_orders(cookie_map)
         candidates = [
             item
@@ -763,7 +693,7 @@ class DeliveryService:
         product = self.database.get_product_by_listing_item_id(item_id, account_id)
         if product is None:
             raise ValueError("订单商品没有唯一匹配到当前账号的已上架商品")
-        if not product["share_url"] or not product["share_verified"] or product["share_needs_review"]:
+        if delivery_issues(product):
             raise ValueError("匹配商品的网盘链接尚未通过验证")
 
         chat_id = await self._create_chat(websocket, buyer_id, seller_id, item_id)
@@ -779,6 +709,21 @@ class DeliveryService:
         )
         order = self.database.get_order(normalized_order_id)
         return {"order": order, "delivery": self.snapshot()}
+
+    @business_operation
+    async def retry_platform_confirmation(self, order_id, account_id, cookie_map):
+        account = self.database.get_account(account_id)
+        order = self.database.get_order(order_id)
+        if (self._account_id != account_id or not account or not account.get("is_active")
+                or not account.get("delivery_enabled") or account.get("binding_status") != "bound"
+                or not order or order.get("account_id") != account_id
+                or order.get("delivery_status") != "confirm_pending" or not order.get("message_sent_at")):
+            raise ValueError("CONFIRMATION_NOT_ALLOWED")
+        safety = await self._outbound_preflight(account_id, "delivery")
+        if not safety["allowed"]:
+            raise ValueError("CONFIRMATION_SAFETY_BLOCKED")
+        await self._confirm_platform_delivery(order_id, cookie_map)
+        self.database.mark_order_delivered(order_id, platform_status="confirmed")
 
     @business_operation
     async def start_if_enabled(self) -> dict[str, object]:
@@ -946,9 +891,7 @@ class DeliveryService:
                 for product in self.database.list_products(account_id)
                 if product["enabled_for_account"]
                 and product["listing_status"] == "published"
-                and product["share_url"]
-                and product["share_verified"]
-                and not product["share_needs_review"]
+                and not delivery_issues(product)
                 and listing_item_id(str(product["listing_url"]))
             ]
             if not ready_products:
@@ -1575,9 +1518,7 @@ class DeliveryService:
             product = self.database.get_product_by_listing_item_id(item_id, account_id)
             if (
                 product is None
-                or not product.get("share_url")
-                or not product.get("share_verified")
-                or product.get("share_needs_review")
+                or delivery_issues(product)
             ):
                 self.database.record_audit(
                     "startup_order_recovery_skipped",
@@ -1916,7 +1857,7 @@ class DeliveryService:
                 {"account_id": account_id, "listing_item_id": item_id},
             )
             return
-        if not product["share_url"] or not product["share_verified"] or product["share_needs_review"]:
+        if delivery_issues(product):
             self._last_error = "待刀成订单对应商品尚未满足自动交付条件，未执行免拼"
             return
 
@@ -1951,7 +1892,8 @@ class DeliveryService:
     ) -> None:
         self._last_event_at = time.strftime("%Y-%m-%d %H:%M:%S")
         account = self.database.get_account(account_id)
-        if not account or not account.get("delivery_enabled"):
+        if (not account or not account.get("delivery_enabled") or not account.get("is_active")
+                or account.get("binding_status") != "bound" or self._account_id != account_id):
             return
         fingerprint = hashlib.sha256(
             json.dumps(event, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
@@ -1999,19 +1941,24 @@ class DeliveryService:
                 {"account_id": account_id, "listing_item_id": item_id},
             )
             return
-        if not product["share_url"] or not product["share_verified"] or product["share_needs_review"]:
+        if delivery_issues(product):
             self._last_error = "匹配商品的网盘链接尚未通过验证，已停止自动发送"
             return
 
-        self.database.upsert_paid_order(
-            order_id=order_id,
-            account_id=account_id,
-            product_dir_name=str(product["dir_name"]),
-            listing_item_id=item_id,
-            buyer_id=buyer_id,
-            chat_id=chat_id,
-            event_fingerprint=fingerprint,
-        )
+        try:
+            self.database.upsert_paid_order(
+                order_id=order_id,
+                account_id=account_id,
+                product_dir_name=str(product["dir_name"]),
+                listing_item_id=item_id,
+                buyer_id=buyer_id,
+                chat_id=chat_id,
+                event_fingerprint=fingerprint,
+            )
+        except ValueError:
+            self._last_error = "订单账号、映射或收件身份冲突，已停止发送，请人工核对"
+            self.database.record_audit("paid_event_order_conflict", order_id, {"account_id": account_id})
+            return
         safety = await self._outbound_preflight(account_id, "delivery")
         if not safety["allowed"]:
             reason = f"安全限流：{safety['reason']}"
@@ -2019,10 +1966,11 @@ class DeliveryService:
             self._last_error = reason
             self._notify(account_id, "自动发货已转人工", reason)
             return
-        if not self.database.claim_order_delivery(order_id):
+        prepared = self.database.claim_verified_delivery(order_id, account_id, item_id)
+        if prepared is None:
             return
 
-        message = compose_delivery_message(product)
+        message = prepared["message"]
         message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()
         try:
             await self._guarded_send_text(
@@ -2046,7 +1994,7 @@ class DeliveryService:
             self._last_error = "发货消息确认超时，已停止重复发送并转人工核对"
             return
         except Exception as exc:
-            self.database.mark_order_failed(order_id, f"发送发货消息失败：{exc}")
+            self.database.mark_order_manual_review(order_id, "发送结果无法确定，禁止自动重发")
             self._last_error = f"发送发货消息失败：{exc}"[:300]
             return
 
@@ -2080,6 +2028,8 @@ class DeliveryService:
         text: str,
     ) -> None:
         async with self._outbound_lock:
+            if kind == "delivery" and (self._account_id != account_id or not reference.startswith("order:") or not self.database.validate_delivery_claim(reference[6:], account_id, chat_id, text, buyer_id=buyer_id)):
+                raise OutboundSafetyError("交付资格或账号/订单资料已变化，必须人工核对")
             decision = self.database.reserve_automation_outbound(
                 account_id, kind, reference
             )
