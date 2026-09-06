@@ -11,6 +11,12 @@ import sys
 from xianyu_manager.runtime_policy import PROCESS_POLICY
 
 
+def exit_status(code, stopping):
+    # A requested systemd stop can leave the child reporting its handled signal.
+    # Do not translate -SIGTERM into exit 241 and mislabel a clean shutdown.
+    return 0 if stopping and code in (0, -signal.SIGTERM, -signal.SIGINT) else code
+
+
 def main():
     if PROCESS_POLICY.mode != "prepare" or PROCESS_POLICY.login_authorized:
         raise SystemExit("PREPARATION_LAUNCHER_REQUIRES_PREPARE_AND_LOGIN_DISABLED")
@@ -46,7 +52,11 @@ def main():
         text=True,
     )
 
+    stopping = False
+
     def stop(signum, _frame):
+        nonlocal stopping
+        stopping = True
         if child.poll() is None:
             child.send_signal(signum)
 
@@ -69,7 +79,7 @@ def main():
             suppressed = True
     code = child.wait()
     log.info("prepare_process_exited code=%s", code)
-    return code
+    return exit_status(code, stopping)
 
 
 if __name__ == "__main__":

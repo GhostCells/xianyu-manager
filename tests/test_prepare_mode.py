@@ -399,3 +399,18 @@ def test_manual_sent_history_cannot_be_reclassified_not_sent(prepared):
                 record_review(db, policy, **args)
         else:
             record_review(db, policy, **args)
+
+
+@pytest.mark.parametrize(
+    "code,stopping,expected",
+    [(0, True, 0), (-15, True, 0), (-2, True, 0), (-15, False, -15), (1, True, 1)],
+)
+def test_preparation_launcher_stop_status(code, stopping, expected):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts/run_preparation_service.py"
+    spec = importlib.util.spec_from_file_location("preparation_launcher", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.exit_status(code, stopping) == expected
