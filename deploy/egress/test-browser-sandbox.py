@@ -41,20 +41,15 @@ async def main():
                 await page.goto('chrome://sandbox')
                 text = await page.locator('body').inner_text()
                 result['sandbox_status'] = text
-                assert 'Seccomp-BPF sandbox' in text and 'Yes' in text
-                processes=[]
-                for proc in Path('/proc').iterdir():
-                    if not proc.name.isdigit(): continue
-                    try:
-                        if proc.stat().st_uid != os.getuid(): continue
-                        args=(proc/'cmdline').read_bytes().split(b'\0')
-                        if b'/opt/google/chrome/chrome' not in args: continue
-                        assert b'--no-sandbox' not in args and b'--disable-setuid-sandbox' not in args
-                        processes.append({'pid':int(proc.name), 'netns':os.stat(proc/'ns/net').st_ino,
-                                          'type':next((a.decode() for a in args if a.startswith(b'--type=')),'browser')})
-                    except (FileNotFoundError, PermissionError): continue
-                assert processes
-                result['processes']=processes
+                import re
+                for feature in ['PID namespaces', 'Network namespaces', 'Seccomp-BPF sandbox']:
+                    assert re.search(re.escape(feature) + r'\s+Yes', text), text
+                # Sandboxed/non-dumpable processes deny /proc/ns reads to same UID.
+                # Query the real browser command line through its local CDP pipe.
+                cdp = await context.new_cdp_session(page)
+                args = (await cdp.send('Browser.getBrowserCommandLine'))['arguments']
+                assert not any(a in args for a in ['--no-sandbox', '--disable-setuid-sandbox'])
+                result['actual_command_line_has_no_sandbox_disable'] = True
             finally:
                 await context.close()
     finally:
