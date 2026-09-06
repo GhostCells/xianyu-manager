@@ -12,7 +12,8 @@ spec.loader.exec_module(mod)
 
 @pytest.mark.parametrize('populated', [False, True, 'partial'])
 @pytest.mark.parametrize('failure', [None, 'sysctl', 'pids'])
-def test_restore_before_delete_and_repeat(monkeypatch, tmp_path, populated, failure):
+@pytest.mark.parametrize('persistent', [False, True])
+def test_restore_before_delete_and_repeat(monkeypatch, tmp_path, populated, failure, persistent):
     env = tmp_path / 'env'
     env.write_text('XIANYU_MANAGER_ACCOUNT_ID=2\nXIANYU_MANAGER_PREPARE_MODE=true\nXIANYU_MANAGER_LOGIN_AUTHORIZED=false\n')
     import hashlib
@@ -21,6 +22,7 @@ def test_restore_before_delete_and_repeat(monkeypatch, tmp_path, populated, fail
                     namespace='xianyu-business', host_interface='xmg-host', restore_sysctls={},
                     original_environment=str(env), live_environment=str(env),
                     environment_sha256=hashlib.sha256(env.read_bytes()).hexdigest())
+    manifest['persistent_preparation'] = persistent
     calls = []
     def fake(*args):
         calls.append(args)
@@ -51,6 +53,8 @@ def test_restore_before_delete_and_repeat(monkeypatch, tmp_path, populated, fail
         if args[:3] == ('nft','delete','table'):
             assert ('sysctl','-n','net.ipv4.ip_forward') in calls[:i]
     assert not any('flush ruleset' in ' '.join(x) for x in calls)
+    if persistent:
+        assert ('systemctl', 'enable', 'xianyu-preparation.service') in calls
 
 
 def test_scope_is_ipv4_and_priorities_are_distinct():

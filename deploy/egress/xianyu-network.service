@@ -1,0 +1,20 @@
+[Unit]
+Description=Fail-closed isolated preparation network, no outbound permission
+Requires=tailscaled.service
+After=tailscaled.service network-online.target
+Wants=network-online.target
+Before=xianyu-isolated-prepare.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I /etc/xianyu-egress/boot-network.py
+# Do not remove protection on stop/failure. The reviewed rollback owns cleanup.
+ExecStop=/usr/sbin/nft flush set inet xianyu_guard lease
+TimeoutStartSec=60
+TimeoutStopSec=15
+User=root
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,8 +1,8 @@
 # TEMPLATE ONLY: stage new preparation data and root-owned code before installing.
 [Unit]
 Description=Single account isolated PREPARATION - login and business forbidden
-Requires=xianyu-preparation-display.service
-After=xianyu-preparation-display.service
+BindsTo=xianyu-network.service xianyu-preparation-display.service
+After=xianyu-network.service xianyu-preparation-display.service
 ConditionPathExists=/run/netns/xianyu-business
 StartLimitIntervalSec=300
 StartLimitBurst=3
@@ -15,6 +15,7 @@ EnvironmentFile=/etc/xianyu-egress/runtime.env
 WorkingDirectory=/opt/xianyu-manager
 ExecStartPre=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/wait_preparation_display.py
 ExecStart=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/run_preparation_service.py
+ExecStartPost=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/wait_preparation_api.py
 RuntimeDirectory=xianyu-runtime
 RuntimeDirectoryMode=0750
 UMask=0007
@@ -43,3 +44,6 @@ InaccessiblePaths=/var/tmp
 UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 StandardOutput=null
 StandardError=null
+
+[Install]
+WantedBy=multi-user.target

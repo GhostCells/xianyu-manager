@@ -50,6 +50,15 @@ def rollback(manifest):
         if state != 'not-found':
             run('systemctl', 'stop', unit)
             assert run('systemctl', 'show', unit, '-p', 'MainPID', '--value') in ('0', '')
+    if manifest.get('persistent_preparation') is True:
+        # Disable future reconstruction before removing its protection. Normal
+        # rollback remains valid for older manifests and partial installations.
+        run('systemctl', 'disable', 'xianyu-network.service',
+            'xianyu-isolated-prepare.service', 'xianyu-api.socket')
+        state = run('systemctl', 'show', 'xianyu-network.service', '-p', 'ActiveState', '--value')
+        if state == 'active':
+            run('systemctl', 'stop', 'xianyu-network.service')
+        run('systemctl', 'enable', 'xianyu-preparation.service')
     tables = json.loads(run('nft', '-j', 'list', 'tables'))['nftables']
     present = {(x['table']['family'], x['table']['name']) for x in tables if 'table' in x}
     if ('inet', 'xianyu_guard') in present:
