@@ -66,6 +66,9 @@ auth-key*
 customer/
 customers/
 deliveries/
+# Private offline operating snapshots (never customer fixtures)
+fulfillment-catalog.private.json
+fulfillment-catalog.private.md
 客户文件/
 客户交付/
 商品库/

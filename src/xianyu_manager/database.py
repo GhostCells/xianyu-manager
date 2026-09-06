@@ -8,6 +8,7 @@ from typing import Iterator
 from urllib.parse import parse_qs, urlparse
 
 from .scanner import ScannedProduct
+from .fulfillment_rules import registered_share_ready, matches_registered_listing
 
 
 SELECTION_CANDIDATE_STATUSES = {
@@ -2086,12 +2087,7 @@ class Database:
             return None
         matches = []
         for product in self.list_products(account_id, include_listing_only=True):
-            listing_url = str(product.get("listing_url") or "")
-            if (
-                product["enabled_for_account"]
-                and product["listing_status"] == "published"
-                and f"id={normalized}" in listing_url
-            ):
+            if matches_registered_listing(product, normalized):
                 matches.append(product)
         return matches[0] if len(matches) == 1 else None
 
@@ -2555,9 +2551,7 @@ class Database:
                 item[key] = bool(item.get(key))
             item["delivery_ready"] = bool(
                 item.get("matched_product_dir_name")
-                and item.get("share_url")
-                and item.get("share_verified")
-                and not item.get("share_needs_review")
+                and registered_share_ready(item)
             )
             result.append(item)
         return result

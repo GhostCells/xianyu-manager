@@ -27,6 +27,7 @@ from .auto_reply import (
     manual_review_reason,
 )
 from .database import Database
+from .fulfillment_rules import compose_delivery_message
 from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
 from .notifications import WindowsNotifier
 from .security import SecretStore
@@ -586,25 +587,6 @@ def inventory_cards_to_raw_items(cards: object) -> list[dict[str, object]]:
             }
         )
     return result
-
-
-def compose_delivery_message(product: dict[str, object]) -> str:
-    lines = [
-        f"拍下啦～这是你购买的「{product.get('title') or product.get('name')}」：",
-        "",
-        f"百度网盘：{product.get('share_url')}",
-    ]
-    share_code = str(product.get("share_code") or "").strip()
-    if share_code:
-        lines.append(f"提取码：{share_code}")
-    lines.extend(
-        [
-            "",
-            "如果觉得内容对你有帮助，方便的话可以留下个评价，感谢支持～",
-            "有什么问题可以继续沟通～",
-        ]
-    )
-    return "\n".join(lines)
 
 
 class DeliveryService:

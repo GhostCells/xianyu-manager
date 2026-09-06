@@ -1,5 +1,22 @@
 # 闲鱼本地管理系统
 
+## 离线交付诊断与私有台账
+
+使用已存在的、静止的一致性 SQLite 备份；工具不启动服务、不联网、不执行迁移。
+
+    PYTHONPATH=src python -m xianyu_manager.offline_catalog --database /private/backup/manager.db
+
+显式导出（目标为仓库外尚不存在的目录）：
+
+    PYTHONPATH=src python -m xianyu_manager.offline_catalog --database /private/backup/manager.db --output-dir /private/offline/snapshot-unique
+
+输出 `fulfillment-catalog.private.json` 和 `fulfillment-catalog.private.md`，目录 700、文件 600。
+台账包含私有交付信息，不进入 Git、公共笔记或客户交付包；权限控制不是加密。
+无法从离线库确认网盘实际有效性，不提供发送文本的记录只列问题；复制不等于发送。
+人工已知不可用的商品可用 `--block-product-ref <dir_name>` 阻断本次导出，不修改数据库。
+本轮只使用合成数据测试，真实导出须另行确认。
+完整规则、已发现风险和后续批次见 [联合方案](docs/accounts-egress-fulfillment-plan.md)。
+
 Windows 本地运行的商品管理工具。当前版本以工作区根目录的 `商品库/` 为唯一商品来源，管理数据单独保存在本目录，不会写入客户交付包。可保存多个账号档案，但同时只操作一个当前账号。
 
 ## 当前能力
