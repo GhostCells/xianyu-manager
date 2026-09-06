@@ -250,7 +250,7 @@ def test_scoped_deployment_contract():
     assert (
         "RestrictNamespaces=user pid net" in service and "CapabilityBoundingSet=\n" in service
     )
-    assert "TemporaryFileSystem=/tmp /run" in service
+    assert "TemporaryFileSystem=/tmp:mode=1777 /run" in service
     assert "Restart=no" in (root / "xianyu-egress.service").read_text()
 
 

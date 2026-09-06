@@ -36,7 +36,7 @@ ProtectControlGroups=true
 PrivateDevices=true
 ReadWritePaths=/var/lib/xianyu-runtime /run/xianyu-runtime
 BindReadOnlyPaths=/etc/xianyu-egress/resolv.conf:/etc/resolv.conf
-TemporaryFileSystem=/tmp /run
+TemporaryFileSystem=/tmp:mode=1777 /run
 BindReadOnlyPaths=/tmp/.X11-unix/X99:/tmp/.X11-unix/X99 /run/xianyu-egress:/run/xianyu-egress
 BindPaths=/run/xianyu-runtime:/run/xianyu-runtime
 InaccessiblePaths=/var/tmp
