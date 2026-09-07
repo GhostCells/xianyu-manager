@@ -142,7 +142,14 @@ def approval_valid(approval, *, now, boot):
             and approval.get("exit_node_ip") == EXIT_NODE
             and address.is_global
             and approval.get("boot_id") == boot
-            and 0 < float(approval["expires_at"]) - now <= 86400
+            and (
+                (approval.get('lifecycle') == 'resident_reply'
+                 and approval.get('account_id') == 2
+                 and approval.get('operations') == ['login', 'reply']
+                 and approval.get('expires_at') is None)
+                or (approval.get('lifecycle', 'window') == 'window'
+                    and 0 < float(approval["expires_at"]) - now <= 86400)
+            )
             and bool(re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", approval["approval_id"]))
             and all(
                 re.fullmatch(r"[0-9a-f]{64}", approval[k])

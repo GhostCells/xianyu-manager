@@ -27,6 +27,7 @@ class RuntimePolicy:
     egress_status_path: Path | None = None
     reply_only: bool = False
     order_cutoff_at: str = ''
+    resident_reply: bool = False
     _state: dict = field(default_factory=dict, compare=False, repr=False)
 
     @property

@@ -37,7 +37,8 @@ from .session import BrowserSessionManager, normalize_listing_url
 settings = load_settings()
 runtime_policy = RuntimePolicy(settings.safe_mode, settings.prepare_mode, settings.account_id,
                                settings.login_authorized, settings.egress_status_path,
-                               reply_only=settings.reply_only, order_cutoff_at=settings.order_cutoff_at)
+                               reply_only=settings.reply_only, order_cutoff_at=settings.order_cutoff_at,
+                               resident_reply=settings.resident_reply)
 database = Database(settings.database_path, safe_mode=settings.safe_mode,
                     prepare_mode=settings.prepare_mode, runtime_account_id=settings.account_id)
 secret_store = SecretStore(settings.auto_reply_secret_path)
@@ -73,6 +74,14 @@ def refresh_products() -> list[dict[str, object]]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     refresh_products()
+    from .resident_reply import restore_reply_owner
+    async def restore_resident():
+        try:
+            runtime_policy._state['resident_start'] = await restore_reply_owner(
+                runtime_policy, session_manager, delivery_service, database)
+        except (ValueError, RuntimeError):
+            runtime_policy._state['resident_start'] = 'manual_review_required'
+    resident = asyncio.create_task(restore_resident()) if runtime_policy.resident_reply else None
     # Reply-only acceptance starts explicitly after API + egress readiness.
     # Persisted switches must not reopen a test window on service restart.
     if runtime_policy.mode == 'normal' and not runtime_policy.reply_only:
@@ -89,6 +98,12 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        if resident:
+            resident.cancel()
+            try:
+                await resident
+            except asyncio.CancelledError:
+                pass
         if guard:
             guard.cancel()
             try:

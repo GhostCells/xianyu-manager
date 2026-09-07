@@ -28,6 +28,7 @@ class Settings:
     egress_status_path: Path | None = None
     reply_only: bool = False
     order_cutoff_at: str = ''
+    resident_reply: bool = False
 
 
 def _parse_bool(value: str, *, name: str, default: bool) -> bool:
@@ -146,7 +147,10 @@ def read_runtime_options() -> dict:
     reply_only = _parse_bool(os.environ.get('XIANYU_MANAGER_REPLY_ONLY', ''), name='XIANYU_MANAGER_REPLY_ONLY', default=False)
     if reply_only and account is None:
         raise ValueError('REPLY_ONLY requires ACCOUNT_ID')
+    resident = _parse_bool(os.environ.get('XIANYU_MANAGER_RESIDENT_REPLY', ''), name='XIANYU_MANAGER_RESIDENT_REPLY', default=False)
+    if resident and (not reply_only or prepare or account is None or not login):
+        raise ValueError('RESIDENT_REPLY requires reply-only, explicit account and login authorization')
     cutoff = os.environ.get('XIANYU_MANAGER_ORDER_CUTOFF_AT', '').strip()
     return dict(prepare_mode=prepare, account_id=account, login_authorized=login,
-                reply_only=reply_only, order_cutoff_at=cutoff,
+                reply_only=reply_only, resident_reply=resident, order_cutoff_at=cutoff,
                 egress_status_path=Path(path) if path else None)
