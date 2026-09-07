@@ -585,6 +585,10 @@ async function loadProducts() {
   state.account = state.prepareMode ? accounts.find(a => a.id === state.runtimeAccountId) || null : accounts.find((account) => account.is_active) || (state.safeMode ? null : accounts[0]) || null;
   state.products = await productsResponse.json();
   state.listings = await listingsResponse.json();
+  if (el('editDialog').open) {
+    const current = state.products.find(item => item.dir_name === el('editDirName').value);
+    if (current) shareFieldsChanged();
+  }
   renderAutoReplyTestProducts();
   el("accountName").textContent = state.account?.name || (state.prepareMode ? "准备环境：账号 ID 待核对" : state.safeMode ? "安全演练：未选定账号" : "七月账号");
   render();
@@ -611,22 +615,43 @@ function openEdit(dirName) {
   if (!product) return;
   el("editDirName").value = product.dir_name;
   el("dialogTitle").textContent = product.name;
+  const exactListing = state.listings.find(item => item.matched_product_dir_name === product.dir_name && item.listing_url === product.listing_url);
+  el("editProductIdentity").textContent = `闲鱼商品：${exactListing?.title || product.title || '未登记标题'}；本地商品：${product.dir_name}`;
   el("enabledForAccount").checked = Boolean(product.enabled_for_account);
   const legacyBlocked = product.catalog_status === "legacy" && !product.enabled_for_account;
   el("enabledForAccount").disabled = legacyBlocked;
   el("legacyNotice").hidden = !legacyBlocked;
   el("shareUrl").value = product.share_url || "";
   el("shareCode").value = product.share_code || "";
-  el("shareVerificationStatus").textContent = product.delivery_issues?.length ? "待核验/修复：" + product.delivery_issues.join(", ") : "当前交付资料已人工核验（非在线检查）";
   state.editFingerprint = product.fulfillment_fingerprint;
+  state.editZipHash = product.zip_hash;
   el("suggestedPrice").value = centsToInput(product.suggested_price_cents);
   el("confirmedPrice").value = centsToInput(product.confirmed_price_cents);
   el("listingUrl").value = product.listing_url || "";
   el("listingStatus").value = product.listing_status;
   state.editBaseline = readEditFields();
+  renderShareVerification(product);
   renderKnowledgeEditor(product);
   el("formError").textContent = "";
-  el("editDialog").showModal();
+  if (!el("editDialog").open) el("editDialog").showModal();
+}
+
+function renderShareVerification(product, changed = false) {
+  const verified = !changed && product.share_verified && !product.share_needs_review &&
+    product.verified_fingerprint && product.verified_fingerprint === product.fulfillment_fingerprint &&
+    Array.isArray(product.delivery_issues) && !product.delivery_issues.length;
+  const status = el('shareVerificationStatus');
+  status.style.color = verified ? '#167342' : '#8a5100';
+  status.textContent = changed ? '⚠ 交付资料已变化，需要重新核验（先保存）' : verified
+    ? `✓ 当前交付版本已人工核验 · 时间：${product.share_verified_at || '未记录'} · 核验摘要：${product.verified_fingerprint.slice(0,12)} · ZIP：${(product.zip_hash || '').slice(0,12)}`
+    : `⚠ 当前交付版本待人工核验 · ${(product.delivery_issues || ['VERIFICATION_VERSION_UNCONFIRMED']).join(', ')} · ZIP：${(product.zip_hash || '').slice(0,12)}`;
+  el('confirmShare').disabled = Boolean(state.shareConfirmPending || verified || changed);
+  el('confirmShare').textContent = verified ? '当前版本已核验' : '我已人工核验当前交付资料';
+}
+
+function shareFieldsChanged() {
+  const product = state.products.find(item => item.dir_name === el('editDirName').value);
+  if (product) renderShareVerification(product, product.zip_hash !== state.editZipHash || ['share_url','share_code'].some(k => readEditFields()[k] !== state.editBaseline[k]));
 }
 
 async function updateKnowledgeFolder(mode, button) {
@@ -670,15 +695,33 @@ function editedFields() {
 }
 
 async function confirmShare(revoke = false) {
+  if (state.shareConfirmPending) return;
   if (Object.keys(editedFields()).length) { el("formError").textContent = "请先保存修改并重新打开，再核验当前资料"; return; }
   const dirName = el("editDirName").value;
+  state.shareConfirmPending = true;
+  el('confirmShare').disabled = el('revokeShare').disabled = true;
+  el('shareUrl').disabled = el('shareCode').disabled = true;
+  el('confirmShare').textContent = '正在确认…';
+  try {
   const response = await fetch(`/api/products/${encodeURIComponent(dirName)}${revoke ? "" : "/verify-share"}`, {
     method: revoke ? "PATCH" : "POST", headers:{"Content-Type":"application/json", "X-Preparation-Action":"confirm-local"},
     body: JSON.stringify(revoke ? {share_verified:false} : {fingerprint:state.editFingerprint}),
   });
-  if (!response.ok) { const result = await response.json(); el("formError").textContent = result.detail || "核验未完成"; return; }
+  if (!response.ok) { const result = await response.json(); throw new Error(result.detail || '核验未完成'); }
   await loadProducts();
   openEdit(dirName);
+  showActionNotice(revoke ? '已撤销当前交付资料核验' : '当前交付资料核验成功');
+  } catch (error) {
+    el('formError').textContent = error.message || '核验失败，请检查连接';
+    showActionNotice(el('formError').textContent, true);
+  } finally {
+    state.shareConfirmPending = false;
+    el('revokeShare').disabled = false;
+    el('shareUrl').disabled = el('shareCode').disabled = false;
+    const product = state.products?.find(item => item.dir_name === dirName);
+    if (product && el('editDirName').value === dirName) shareFieldsChanged();
+    else { el('confirmShare').disabled = false; el('confirmShare').textContent = '我已人工核验当前交付资料'; }
+  }
 }
 
 async function saveEdit(event) {
@@ -815,6 +858,8 @@ el("syncBinding").addEventListener("click", () => sessionAction("sync"));
 el("cancelBinding").addEventListener("click", () => sessionAction("cancel"));
 el("startDelivery").addEventListener("click", () => deliveryAction("start"));
 el("confirmShare").addEventListener("click", () => confirmShare(false));
+el('shareUrl').addEventListener('input', shareFieldsChanged);
+el('shareCode').addEventListener('input', shareFieldsChanged);
 el("revokeShare").addEventListener("click", () => confirmShare(true));
 el("probeDelivery").addEventListener("click", () => deliveryAction("probe"));
 el("stopDelivery").addEventListener("click", () => deliveryAction("stop"));

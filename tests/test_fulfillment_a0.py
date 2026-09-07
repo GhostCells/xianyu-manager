@@ -447,7 +447,7 @@ const elements={}; const el=id=>elements[id]||(elements[id]={value:'',checked:fa
 const requests=[];
 const context={el,state:{},Object,JSON,encodeURIComponent,
  inputToCents:v=>v===''?null:Math.round(Number(v)*100),
- loadProducts:async()=>{},openEdit:()=>{},
+ loadProducts:async()=>{},openEdit:()=>{},showActionNotice:()=>{},
  fetch:async(url,options)=>{requests.push({url,...options});return {ok:true}}};
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('function readEditFields()'),source.indexOf('async function copyListing(')),context);
