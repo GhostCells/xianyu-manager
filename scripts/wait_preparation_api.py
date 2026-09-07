@@ -3,9 +3,10 @@ import http.client
 import json
 import socket
 import time
+import sys
 
 
-def main():
+def main(*, reply_only=False):
     for _ in range(45):
         connection = http.client.HTTPConnection('localhost', timeout=2)
         try:
@@ -17,10 +18,15 @@ def main():
             response = connection.getresponse()
             body = json.loads(response.read())
             assert response.status == 200
-            assert body['mode'] == 'prepare'
+            assert body['mode'] == ('normal' if reply_only else 'prepare')
             assert body['runtime_account_id'] == 2
-            assert body['business_forbidden'] is True
-            assert body['automation_allowed'] is False
+            if reply_only:
+                assert body['reply_only'] is True
+                assert body['fulfillment_enabled'] is False
+                assert body['order_recovery_enabled'] is False
+            else:
+                assert body['business_forbidden'] is True
+                assert body['automation_allowed'] is False
             return
         except (OSError, ValueError, AssertionError, http.client.HTTPException):
             time.sleep(1)
@@ -30,4 +36,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] not in ([], ['--reply-only']):
+        raise SystemExit('UNSUPPORTED_READINESS_MODE')
+    main(reply_only=sys.argv[1:] == ['--reply-only'])

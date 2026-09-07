@@ -43,7 +43,7 @@ async def run_once(config, db, token, logger):
 
 
 async def run_daemon(config, db, token, logger, state_path: Path) -> None:
-    PROCESS_POLICY.require_business()
+    PROCESS_POLICY.require_selection()
     if not config.daily_times:
         raise ValueError("定时模式必须配置 daily_times")
     while True:
@@ -59,7 +59,7 @@ async def run_daemon(config, db, token, logger, state_path: Path) -> None:
 
 
 def main() -> int:
-    PROCESS_POLICY.require_business()
+    PROCESS_POLICY.require_selection()
     args = parse_args()
     config = load_scheduler_config(args.config)
     if args.keyword:

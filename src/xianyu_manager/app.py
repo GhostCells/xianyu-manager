@@ -36,7 +36,8 @@ from .session import BrowserSessionManager, normalize_listing_url
 
 settings = load_settings()
 runtime_policy = RuntimePolicy(settings.safe_mode, settings.prepare_mode, settings.account_id,
-                               settings.login_authorized, settings.egress_status_path)
+                               settings.login_authorized, settings.egress_status_path,
+                               reply_only=settings.reply_only, order_cutoff_at=settings.order_cutoff_at)
 database = Database(settings.database_path, safe_mode=settings.safe_mode,
                     prepare_mode=settings.prepare_mode, runtime_account_id=settings.account_id)
 secret_store = SecretStore(settings.auto_reply_secret_path)
@@ -72,7 +73,9 @@ def refresh_products() -> list[dict[str, object]]:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     refresh_products()
-    if runtime_policy.mode == 'normal':
+    # Reply-only acceptance starts explicitly after API + egress readiness.
+    # Persisted switches must not reopen a test window on service restart.
+    if runtime_policy.mode == 'normal' and not runtime_policy.reply_only:
         await delivery_service.start_if_enabled()
     async def watch_egress():
         while True:
@@ -130,6 +133,9 @@ async def local_request_guard(request: Request, call_next):
             "error_code": "SAFE_MODE_OPERATION_BLOCKED",
             "detail": runtime_policy.error_message,
         })
+
+    if runtime_policy.reply_only and request.url.path.startswith(('/api/selection', '/api/internal/selection')):
+        return JSONResponse(status_code=403, content={'detail': 'REPLY_ONLY_SELECTION_FORBIDDEN'})
 
     if runtime_policy.mode == 'prepare':
         path = request.url.path

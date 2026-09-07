@@ -99,6 +99,7 @@ class BrowserSessionManager:
         page_number: int = 1,
         limit: int = 30,
     ) -> dict[str, object]:
+        self.runtime_policy.require_selection()
         if page_number != 1:
             raise ValueError("第一阶段只支持搜索第一页")
         acquired = False
@@ -162,6 +163,7 @@ class BrowserSessionManager:
         account_id: int,
         item_url: str,
     ) -> dict[str, object]:
+        self.runtime_policy.require_selection()
         acquired = False
         detail_page: Any | None = None
         try:

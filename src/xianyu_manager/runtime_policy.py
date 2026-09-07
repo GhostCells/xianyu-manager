@@ -25,6 +25,8 @@ class RuntimePolicy:
     account_id: int | None = None
     login_authorized: bool = False
     egress_status_path: Path | None = None
+    reply_only: bool = False
+    order_cutoff_at: str = ''
     _state: dict = field(default_factory=dict, compare=False, repr=False)
 
     @property
@@ -40,6 +42,26 @@ class RuntimePolicy:
     def require_account(self, account_id):
         if self.managed and (self.account_id is None or account_id != self.account_id):
             raise RuntimeOperationBlocked("RUNTIME_ACCOUNT_NOT_BOUND_OR_MISMATCH")
+
+    @property
+    def fulfillment_enabled(self):
+        return self.mode == 'normal' and not self.reply_only
+
+    @property
+    def order_recovery_enabled(self):
+        return self.fulfillment_enabled
+
+    def require_fulfillment(self):
+        self.require_business()
+        if not self.fulfillment_enabled:
+            raise RuntimeOperationBlocked('REPLY_ONLY_FULFILLMENT_FORBIDDEN')
+        from .order_cutoff import utc_time
+        utc_time(self.order_cutoff_at, field='ORDER_CUTOFF')
+
+    def require_selection(self):
+        self.require_business()
+        if self.reply_only:
+            raise RuntimeOperationBlocked('REPLY_ONLY_SELECTION_FORBIDDEN')
 
     def egress_status(self):
         result = {
@@ -133,6 +155,11 @@ class RuntimePolicy:
                 can_login = False
         return {
             "mode": self.mode,
+            "reply_only": self.reply_only,
+            "reply_enabled": self.mode == 'normal',
+            "fulfillment_enabled": self.fulfillment_enabled,
+            "order_recovery_enabled": self.order_recovery_enabled,
+            "order_cutoff_configured": bool(self.order_cutoff_at),
             "safe_mode": self.safe_mode,
             "prepare_mode": self.mode == "prepare",
             "runtime_account_id": self.account_id,

@@ -155,7 +155,7 @@ async def run_collection_cycle(
     search_function: Callable[..., Awaitable[dict[str, Any]]] = collect_selection_search,
     batch_function: Callable[..., Awaitable[dict[str, Any]]] = collect_selection_details_batch,
 ) -> dict[str, Any]:
-    PROCESS_POLICY.require_business()
+    PROCESS_POLICY.require_selection()
     cycle_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     summary: dict[str, Any] = {
         "cycle_id": cycle_id,

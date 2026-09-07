@@ -26,16 +26,21 @@ def listen_arguments():
     return ["--uds", uds]
 
 
-def validate_policy(policy):
+def validate_policy(policy, *, reply_only=False):
     # Starting the API never starts a browser. Login additionally requires a
     # fresh root manual-window capability in RuntimePolicy at every operation.
+    if reply_only:
+        if (policy.mode != 'normal' or not policy.reply_only or policy.account_id is None
+                or policy.fulfillment_enabled or policy.order_recovery_enabled):
+            raise SystemExit('REPLY_ONLY_LAUNCHER_REQUIRES_EXPLICIT_REPLY_ONLY_POLICY')
+        return
     if policy.mode != 'prepare' or (policy.login_authorized and policy.account_id is None):
         raise SystemExit('PREPARATION_LAUNCHER_REQUIRES_PREPARE_AND_EXPLICIT_ACCOUNT')
 
 
-def main():
-    validate_policy(PROCESS_POLICY)
-    if os.environ.get("SILICONFLOW_API_KEY"):
+def main(*, reply_only=False):
+    validate_policy(PROCESS_POLICY, reply_only=reply_only)
+    if not reply_only and os.environ.get("SILICONFLOW_API_KEY"):
         raise SystemExit("PREPARATION_MUST_NOT_HAVE_LLM_SECRET")
     log = logging.getLogger("preparation")
     log.setLevel(logging.INFO)
@@ -95,4 +100,6 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if sys.argv[1:] not in ([], ['--reply-only']):
+        raise SystemExit('UNSUPPORTED_LAUNCH_MODE')
+    raise SystemExit(main(reply_only=sys.argv[1:] == ['--reply-only']))

@@ -655,6 +655,7 @@ class DeliveryService:
     @business_operation
     async def reconcile_order(self, order_id: str) -> dict[str, object]:
         """Recover one explicitly selected paid order from the seller order list."""
+        self.runtime_policy.require_fulfillment()
         normalized_order_id = str(order_id or "").strip()
         cookie_map = self._runtime_cookie_map
         websocket = self._runtime_websocket
@@ -713,6 +714,7 @@ class DeliveryService:
 
     @business_operation
     async def retry_platform_confirmation(self, order_id, account_id, cookie_map):
+        self.runtime_policy.require_fulfillment()
         account = self.database.get_account(account_id)
         order = self.database.get_order(order_id)
         if (self._account_id != account_id or not account or not account.get("is_active")
@@ -728,17 +730,18 @@ class DeliveryService:
 
     @business_operation
     async def start_if_enabled(self) -> dict[str, object]:
-        account = self.database.get_active_account()
+        account = (self.database.get_account(self.runtime_policy.account_id)
+                   if self.runtime_policy.account_id is not None else self.database.get_active_account())
         auto_reply = self.database.get_auto_reply_settings(int(account["id"]))
         account_id = int(account["id"])
-        automation_enabled = bool(account.get("delivery_enabled") or auto_reply.get("enabled"))
+        automation_enabled = bool((self.runtime_policy.fulfillment_enabled and account.get("delivery_enabled")) or auto_reply.get("enabled"))
         if automation_enabled:
             if account.get("binding_status") != "bound":
                 self._status = "verification_required"
                 self._last_error = "已保留消息自动化设置，但闲鱼登录需要重新验证"
             else:
                 try:
-                    if account.get("delivery_enabled"):
+                    if self.runtime_policy.fulfillment_enabled and account.get("delivery_enabled"):
                         await self.start(int(account["id"]), persist=False)
                     else:
                         await self.start_auto_reply(int(account["id"]))
@@ -801,7 +804,7 @@ class DeliveryService:
         if reply_settings.get("enabled"):
             return await self.start_auto_reply(account_id)
         account = self.database.get_account(account_id)
-        if account and account.get("delivery_enabled"):
+        if self.runtime_policy.fulfillment_enabled and account and account.get("delivery_enabled"):
             return self.snapshot()
         return await self.stop(persist=False)
 
@@ -879,6 +882,7 @@ class DeliveryService:
         persist: bool = True,
         session_handoff: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        self.runtime_policy.require_fulfillment()
         async with self._lock:
             account = self.database.get_account(account_id)
             if account is None or not account["is_active"]:
@@ -1027,6 +1031,7 @@ class DeliveryService:
                     self._runtime_websocket = websocket
                     self._runtime_seller_id = seller_id
                     self._status = "listening"
+                    self._reply_listen_started_ms = int(time.time() * 1000)
                     self._last_error = ""
                     self.database.update_account_binding(account_id, "bound")
                     account = self.database.get_account(account_id) or {}
@@ -1048,13 +1053,7 @@ class DeliveryService:
                         "登录会话有效，监听已自动恢复。",
                     )
                     retry_delay = 3
-                    recovery_task = asyncio.create_task(
-                        self._recover_recent_paid_orders(
-                            websocket, account_id, seller_id, cookie_map
-                        )
-                    )
-                    self._event_tasks.add(recovery_task)
-                    recovery_task.add_done_callback(self._event_tasks.discard)
+                    self._schedule_order_recovery(websocket, account_id, seller_id, cookie_map)
                     await self._listen(websocket, account_id, seller_id, cookie_map)
             except asyncio.CancelledError:
                 raise
@@ -1455,6 +1454,8 @@ class DeliveryService:
                     str(key): value for key, value in item.items() if key != "data"
                 }
                 group_stage = group_event_stage(event)
+                if (group_stage in {'waiting', 'ready'} or is_paid_event(event)) and not self.runtime_policy.fulfillment_enabled:
+                    continue
                 if group_stage == "waiting":
                     task = asyncio.create_task(
                         self._process_group_waiting_event(
@@ -1468,6 +1469,10 @@ class DeliveryService:
                         )
                     )
                 else:
+                    if self.runtime_policy.reply_only:
+                        event_ms = extract_event_timestamp_ms(event)
+                        if event_ms is None or event_ms <= getattr(self, '_reply_listen_started_ms', int(time.time() * 1000)):
+                            continue
                     chat_message = extract_plain_chat_message(event, seller_id)
                     if chat_message is None:
                         continue
@@ -1479,6 +1484,17 @@ class DeliveryService:
                 self._event_tasks.add(task)
                 task.add_done_callback(self._event_tasks.discard)
 
+    def _schedule_order_recovery(self, websocket, account_id, seller_id, cookie_map):
+        if not self.runtime_policy.order_recovery_enabled:
+            return
+        account = self.database.get_account(account_id) or {}
+        if not account.get('delivery_enabled'):
+            return
+        self.runtime_policy.require_fulfillment()
+        task = asyncio.create_task(self._recover_recent_paid_orders(websocket, account_id, seller_id, cookie_map))
+        self._event_tasks.add(task)
+        task.add_done_callback(self._event_tasks.discard)
+
     @business_operation
     async def _recover_recent_paid_orders(
         self,
@@ -1488,6 +1504,9 @@ class DeliveryService:
         cookie_map: dict[str, str],
     ) -> None:
         """Safely recover exact, recent paid orders that arrived while offline."""
+        if not self.runtime_policy.order_recovery_enabled:
+            return
+        self.runtime_policy.require_fulfillment()
         recovered_count = 0
         try:
             preview = await self._fetch_recent_sold_orders(cookie_map, page_size=20)
@@ -1541,8 +1560,7 @@ class DeliveryService:
                         "itemId": item_id,
                         "buyerId": buyer_id,
                         "sid": chat_id,
-                        "timestamp": candidate.get("paid_time")
-                        or candidate.get("create_time"),
+                        "timestamp": candidate.get("paid_time"),
                         "source": "startup_recent_order_recovery",
                     },
                 )
@@ -1716,6 +1734,11 @@ class DeliveryService:
             if product is None:
                 self.database.mark_chat_message(message_id, "manual", "商品映射已变化，转人工处理")
                 return
+            if self.runtime_policy.reply_only:
+                from .knowledge import sanitize_product_knowledge
+                if self._account_id != account_id or not sanitize_product_knowledge(str(product.get('knowledge_text') or '')):
+                    self.database.mark_chat_message(message_id, 'manual', 'REPLY_ACCOUNT_OR_KNOWLEDGE_NOT_READY')
+                    return
             safety = await self._outbound_preflight(account_id, "reply")
             if not safety["allowed"]:
                 reason = f"安全限流：{safety['reason']}"
@@ -1751,6 +1774,12 @@ class DeliveryService:
                 return
             if self._runtime_websocket is not websocket or self._status != "listening":
                 self.database.mark_chat_message(message_id, "failed", "消息连接已变化，未发送")
+                return
+
+            current_product = self.database.get_product_by_listing_item_id(item_id, account_id)
+            if (current_product is None or current_product['dir_name'] != product['dir_name']
+                    or current_product.get('knowledge_text') != product.get('knowledge_text')):
+                self.database.mark_chat_message(message_id, 'manual', 'REPLY_PRODUCT_CHANGED_DURING_GENERATION')
                 return
 
             await self._guarded_send_text(
@@ -1805,6 +1834,9 @@ class DeliveryService:
         cookie_map: dict[str, str],
         event: dict[str, Any],
     ) -> None:
+        if not self.runtime_policy.fulfillment_enabled:
+            return
+        self.runtime_policy.require_fulfillment()
         self._last_event_at = time.strftime("%Y-%m-%d %H:%M:%S")
         account = self.database.get_account(account_id)
         if (
@@ -1893,6 +1925,9 @@ class DeliveryService:
         cookie_map: dict[str, str],
         event: dict[str, Any],
     ) -> None:
+        if not self.runtime_policy.fulfillment_enabled:
+            return
+        self.runtime_policy.require_fulfillment()
         self._last_event_at = time.strftime("%Y-%m-%d %H:%M:%S")
         account = self.database.get_account(account_id)
         if (not account or not account.get("delivery_enabled") or not account.get("is_active")
@@ -1948,6 +1983,16 @@ class DeliveryService:
             self._last_error = "匹配商品的网盘链接尚未通过验证，已停止自动发送"
             return
 
+        # All live, recovery and manual reconciliation routes re-read the exact
+        # seller order. Event timestamps are not proof of payment time.
+        try:
+            payment_time = await self._verified_payment_time(account_id, order_id, item_id, buyer_id, cookie_map)
+        except (ValueError, RuntimeError) as exc:
+            self._last_error = f'ORDER_CUTOFF_BLOCKED: {type(exc).__name__}'
+            from .order_cutoff import OrderCutoffBlocked
+            reason = str(exc) if isinstance(exc, OrderCutoffBlocked) else 'PLATFORM_PAYMENT_LOOKUP_FAILED'
+            self.database.record_audit('order_cutoff_blocked', order_id, {'account_id': account_id, 'reason': reason})
+            return
         try:
             self.database.upsert_paid_order(
                 order_id=order_id,
@@ -1985,6 +2030,7 @@ class DeliveryService:
                 buyer_id=buyer_id,
                 seller_id=seller_id,
                 text=message,
+                payment_time=payment_time,
             )
         except OutboundSafetyError as exc:
             self.database.mark_order_manual_review(order_id, str(exc)[:300])
@@ -2029,8 +2075,13 @@ class DeliveryService:
         buyer_id: str,
         seller_id: str,
         text: str,
+        payment_time=None,
     ) -> None:
         async with self._outbound_lock:
+            if kind == 'delivery':
+                self.runtime_policy.require_fulfillment()
+                from .order_cutoff import require_after_cutoff
+                require_after_cutoff(self.runtime_policy.order_cutoff_at, payment_time)
             if kind == "delivery" and (self._account_id != account_id or not reference.startswith("order:") or not self.database.validate_delivery_claim(reference[6:], account_id, chat_id, text, buyer_id=buyer_id)):
                 raise OutboundSafetyError("交付资格或账号/订单资料已变化，必须人工核对")
             decision = self.database.reserve_automation_outbound(
@@ -2057,6 +2108,21 @@ class DeliveryService:
                 )
                 raise
             self.database.finish_automation_outbound(event_id, sent=True)
+
+    async def _verified_payment_time(self, account_id, order_id, item_id, buyer_id, cookie_map):
+        from .order_cutoff import OrderCutoffBlocked, require_after_cutoff
+        self.runtime_policy.require_fulfillment()
+        self.runtime_policy.require_account(account_id)
+        if self._account_id != account_id:
+            raise OrderCutoffBlocked('ORDER_ACCOUNT_MISMATCH')
+        preview = await self._fetch_recent_sold_orders(cookie_map)
+        matches = [row for row in preview.get('orders', []) if isinstance(row, dict) and row.get('order_id') == order_id]
+        if len(matches) != 1:
+            raise OrderCutoffBlocked('PLATFORM_ORDER_NOT_UNIQUE_OR_NOT_FOUND')
+        row = matches[0]
+        if row.get('item_id') != item_id or row.get('buyer_id') != buyer_id or row.get('order_status') not in {'待发货', 'pending_ship'}:
+            raise OrderCutoffBlocked('PLATFORM_ORDER_IDENTITY_OR_PAYMENT_STATE_MISMATCH')
+        return require_after_cutoff(self.runtime_policy.order_cutoff_at, row.get('paid_time'))
 
     @business_operation
     async def _send_text(
@@ -2203,6 +2269,7 @@ class DeliveryService:
     async def _confirm_platform_delivery(
         self, order_id: str, cookie_map: dict[str, str]
     ) -> None:
+        self.runtime_policy.require_fulfillment()
         data_json = json.dumps(
             {
                 "orderId": order_id,
@@ -2256,6 +2323,7 @@ class DeliveryService:
         buyer_id: str,
         cookie_map: dict[str, str],
     ) -> None:
+        self.runtime_policy.require_fulfillment()
         data_json = json.dumps(
             {
                 "bizOrderId": order_id,

@@ -326,6 +326,7 @@ def test_publishing_warning_allowed_blocking_quality_rejected(db):
 
 
 def test_confirm_pending_only_confirms_platform_despite_changed_share(db, monkeypatch):
+    from xianyu_manager.runtime_policy import RuntimePolicy
     from xianyu_manager.delivery import DeliveryService
     from xianyu_manager.security import SecretStore
 
@@ -352,6 +353,7 @@ def test_confirm_pending_only_confirms_platform_despite_changed_share(db, monkey
 
     monkeypatch.setattr(service, "_outbound_preflight", preflight)
     monkeypatch.setattr(service, "_confirm_platform_delivery", platform)
+    service.runtime_policy = RuntimePolicy(order_cutoff_at='2020-01-01T00:00:00Z')
     monkeypatch.setattr(service, "_send_text", no_text)
     asyncio.run(service.retry_platform_confirmation("order", account, {}))
     assert events == ["platform"]
@@ -379,6 +381,8 @@ def test_delivery_paths_use_shared_rules_and_uncertain_ack_is_not_retried(
     )
     service._account_id = account
     service._runtime_seller_id = "111111"
+    from xianyu_manager.runtime_policy import RuntimePolicy
+    service.runtime_policy = RuntimePolicy(order_cutoff_at='2020-01-01T00:00:00Z')
     service._status = "listening"
     service._runtime_cookie_map = {}
     service._runtime_websocket = object()

@@ -26,6 +26,8 @@ class Settings:
     account_id: int | None = None
     login_authorized: bool = False
     egress_status_path: Path | None = None
+    reply_only: bool = False
+    order_cutoff_at: str = ''
 
 
 def _parse_bool(value: str, *, name: str, default: bool) -> bool:
@@ -141,5 +143,10 @@ def read_runtime_options() -> dict:
     path = os.environ.get('XIANYU_MANAGER_EGRESS_STATUS_PATH', '').strip()
     if path and not Path(path).is_absolute():
         raise ValueError('EGRESS_STATUS_PATH must be absolute')
+    reply_only = _parse_bool(os.environ.get('XIANYU_MANAGER_REPLY_ONLY', ''), name='XIANYU_MANAGER_REPLY_ONLY', default=False)
+    if reply_only and account is None:
+        raise ValueError('REPLY_ONLY requires ACCOUNT_ID')
+    cutoff = os.environ.get('XIANYU_MANAGER_ORDER_CUTOFF_AT', '').strip()
     return dict(prepare_mode=prepare, account_id=account, login_authorized=login,
+                reply_only=reply_only, order_cutoff_at=cutoff,
                 egress_status_path=Path(path) if path else None)
