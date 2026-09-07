@@ -98,6 +98,25 @@ class RuntimePolicy:
         if self.managed and not self.login_authorized:
             raise RuntimeOperationBlocked("REAL_LOGIN_NOT_AUTHORIZED")
         self.require_egress()
+        if self.prepare_mode:
+            self.preparation_permission('login')
+
+    def preparation_permission(self, action):
+        """Only a fresh root-produced manual window permits preparation IO."""
+        if self.mode != 'prepare' or not self.login_authorized:
+            raise RuntimeOperationBlocked('PREPARATION_PERMISSION_REQUIRED')
+        self.require_egress()
+        try:
+            data = read_root_json(self.egress_status_path)
+        except (OSError, ValueError, TypeError):
+            raise RuntimeOperationBlocked('PREPARATION_PERMISSION_REQUIRED') from None
+        if (not clock_valid(data) or data.get('purpose') != 'manual_login_inventory'
+                or data.get('account_id') != self.account_id
+                or not isinstance(data.get('operations'), list)
+                or action not in data.get('operations', [])
+                or not data.get('approval_id')):
+            raise RuntimeOperationBlocked('PREPARATION_PERMISSION_REQUIRED')
+        return str(data['approval_id'])
 
     def snapshot(self):
         egress = self.egress_status()
@@ -107,6 +126,11 @@ class RuntimePolicy:
             and self.login_authorized
             and egress["ready"]
         )
+        if can_login and self.prepare_mode:
+            try:
+                self.preparation_permission('login')
+            except (OSError, ValueError, RuntimeError):
+                can_login = False
         return {
             "mode": self.mode,
             "safe_mode": self.safe_mode,

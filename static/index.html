@@ -159,6 +159,9 @@
           <label>私有证据编号<input id="reviewEvidence" required pattern="[A-Za-z0-9_.:-]+" maxlength="120" /></label>
           <button id="submitReview" type="submit">登记核对结果（不发送）</button>
         </form>
+        <button id="prepareInventory" type="button" disabled>本人已确认同一账号：读取一次在售列表</button>
+        <p>最多5页，每页20条；不会启动消息监听，不改平台商品或交付映射。失败不自动重试。请先在官方页面确认账号并完成登录确认。</p>
+        <div id="preparationInventoryReport"></div>
         <p id="preparationMessage" role="status"></p>
       </section>
     </main>

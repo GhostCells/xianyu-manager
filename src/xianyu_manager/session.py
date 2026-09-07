@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from .database import Database
 from .browser_launch import sandbox_options
 from .fulfillment_rules import parse_listing_id
-from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation, login_operation
+from .runtime_policy import PROCESS_POLICY, RuntimePolicy, RuntimeOperationBlocked, business_operation, login_operation
 from .profile_lock import ProfileOwnerLock
 from .selection_bridge import (
     SelectionBridgeError,
@@ -414,7 +414,7 @@ class BrowserSessionManager:
                 await self._launch_visible_browser(account_id)
                 try:
                     await self._page.goto(
-                        GOOFISH_LOGIN_TARGET,
+                        GOOFISH_HOME if self.runtime_policy.prepare_mode else GOOFISH_LOGIN_TARGET,
                         wait_until="domcontentloaded",
                         timeout=60_000,
                     )
@@ -476,6 +476,15 @@ class BrowserSessionManager:
         self._handoff_account_id = None
         self._handoff_storage_state = None
         return state
+
+    async def read_preparation_inventory(self, account_id: int):
+        from .preparation_inventory import collect_once
+        self.runtime_policy.require_login(account_id)
+        async with self._lock:
+            if (self._account_id != account_id or self._context is None
+                    or self._handoff_account_id != account_id):
+                raise RuntimeOperationBlocked('MANUAL_LOGIN_CONFIRMATION_REQUIRED')
+            return await collect_once(self, account_id)
 
     @login_operation
     async def cancel_login(self, account_id: int) -> dict[str, object]:

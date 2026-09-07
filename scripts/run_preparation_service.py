@@ -26,9 +26,15 @@ def listen_arguments():
     return ["--uds", uds]
 
 
+def validate_policy(policy):
+    # Starting the API never starts a browser. Login additionally requires a
+    # fresh root manual-window capability in RuntimePolicy at every operation.
+    if policy.mode != 'prepare' or (policy.login_authorized and policy.account_id is None):
+        raise SystemExit('PREPARATION_LAUNCHER_REQUIRES_PREPARE_AND_EXPLICIT_ACCOUNT')
+
+
 def main():
-    if PROCESS_POLICY.mode != "prepare" or PROCESS_POLICY.login_authorized:
-        raise SystemExit("PREPARATION_LAUNCHER_REQUIRES_PREPARE_AND_LOGIN_DISABLED")
+    validate_policy(PROCESS_POLICY)
     if os.environ.get("SILICONFLOW_API_KEY"):
         raise SystemExit("PREPARATION_MUST_NOT_HAVE_LLM_SECRET")
     log = logging.getLogger("preparation")

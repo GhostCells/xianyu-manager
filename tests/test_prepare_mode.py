@@ -104,6 +104,9 @@ def test_prepare_full_lifespan_and_restart_never_recovers(prepared):
             assert h["runtime_account_id"] is None
             assert client.post("/api/session/start").status_code == 403
             assert client.post("/api/delivery/start").status_code == 403
+            assert client.get('/api/preparation/inventory').status_code == 200
+            assert client.post('/api/preparation/inventory').status_code == 403
+            assert client.post('/api/preparation/inventory', headers={'X-Preparation-Action': 'confirm-local'}).status_code == 403
             assert client.post("/api/accounts/1/activate").status_code == 403
             assert session._context is None and delivery._task is None
         assert snapshot(db) == before
@@ -138,6 +141,10 @@ def ready_policy(tmp_path, **overrides):
                 observed_public_ip="192.0.2.1",
                 reviewed_public_ip="192.0.2.1",
                 path_kind="relay",
+                purpose='manual_login_inventory',
+                approval_id='synthetic-manual-window',
+                account_id=1,
+                operations=['login', 'inventory_once'],
             )
         )
     )

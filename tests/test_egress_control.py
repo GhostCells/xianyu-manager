@@ -221,6 +221,10 @@ def test_existing_application_gate_accepts_only_trusted_current_contract(
     p = policy_module.RuntimePolicy(
         prepare_mode=True, account_id=2, login_authorized=True, egress_status_path=file
     )
+    with pytest.raises(policy_module.RuntimeOperationBlocked, match='PREPARATION_PERMISSION_REQUIRED'):
+        p.require_login(2)
+    writes[control.STATE].update(purpose='manual_login_inventory', account_id=2,
+                                 operations=['login', 'inventory_once'])
     p.require_login(2)
     with pytest.raises(policy_module.RuntimeOperationBlocked, match="PREPARE_BUSINESS"):
         p.require_business()
@@ -266,7 +270,14 @@ def test_uds_launch_is_opt_in_and_does_not_remove_login_lock(monkeypatch):
     monkeypatch.setenv("XIANYU_MANAGER_API_UDS", "/tmp/untrusted.sock")
     with pytest.raises(ValueError):
         module.listen_arguments()
-    assert "PROCESS_POLICY.login_authorized" in path.read_text()
+    for policy in [policy_module.RuntimePolicy(),
+                   policy_module.RuntimePolicy(safe_mode=True, prepare_mode=True),
+                   policy_module.RuntimePolicy(prepare_mode=True, login_authorized=True)]:
+        with pytest.raises(SystemExit):
+            module.validate_policy(policy)
+    module.validate_policy(policy_module.RuntimePolicy(prepare_mode=True, account_id=2, login_authorized=True))
+    with pytest.raises(policy_module.RuntimeOperationBlocked):
+        policy_module.RuntimePolicy(prepare_mode=True, account_id=2, login_authorized=True).require_login(2)
 
 
 def test_import_does_not_require_unix_pwd_on_windows(monkeypatch):

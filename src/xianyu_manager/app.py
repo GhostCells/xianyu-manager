@@ -134,13 +134,14 @@ async def local_request_guard(request: Request, call_next):
     if runtime_policy.mode == 'prepare':
         path = request.url.path
         read_allowed = request.method in {'GET', 'HEAD'} and (
-            path in SAFE_READ_PATHS or path.startswith('/static/') or path == '/api/preparation/orders')
+            path in SAFE_READ_PATHS or path.startswith('/static/') or path in {'/api/preparation/orders', '/api/preparation/inventory'})
         login_allowed = request.method == 'POST' and path in {
             '/api/session/start', '/api/session/confirm', '/api/session/sync', '/api/session/cancel'}
         review_allowed = request.method == 'POST' and path == '/api/preparation/order-review'
+        inventory_allowed = request.method == 'POST' and path == '/api/preparation/inventory'
         product_allowed = ((request.method == 'PATCH' and path.startswith('/api/products/') and path.count('/') == 3)
                            or (request.method == 'POST' and path.startswith('/api/products/') and path.endswith('/verify-share')))
-        if not (read_allowed or login_allowed or review_allowed or product_allowed):
+        if not (read_allowed or login_allowed or review_allowed or product_allowed or inventory_allowed):
             return JSONResponse(status_code=403, content={'detail': 'PREPARE_API_NOT_ALLOWED'})
         if login_allowed:
             try:
@@ -153,7 +154,7 @@ async def local_request_guard(request: Request, call_next):
                         raise RuntimeOperationBlocked('RUNTIME_ACCOUNT_MISMATCH')
             except RuntimeError as exc:
                 return JSONResponse(status_code=403, content={'detail': str(exc)})
-        if review_allowed or product_allowed:
+        if review_allowed or product_allowed or inventory_allowed:
             if runtime_policy.account_id is None or request.headers.get('X-Preparation-Action') != 'confirm-local':
                 return JSONResponse(status_code=403, content={'detail': 'PREPARATION_LOCAL_AUTH_REQUIRED'})
 
@@ -473,6 +474,23 @@ class ManualOrderReview(BaseModel):
 @app.get('/api/preparation/orders')
 def preparation_orders():
     return list_review_orders(database, runtime_policy)
+
+
+@app.get('/api/preparation/inventory')
+def preparation_inventory_report():
+    from .preparation_inventory import latest_report
+    if runtime_policy.mode != 'prepare':
+        raise HTTPException(status_code=403, detail='PREPARE_REQUIRED')
+    return latest_report(database, runtime_policy.account_id)
+
+
+@app.post('/api/preparation/inventory')
+async def preparation_inventory_read():
+    try:
+        runtime_policy.preparation_permission('inventory_once')
+        return await session_manager.read_preparation_inventory(runtime_policy.account_id)
+    except RuntimeOperationBlocked as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @app.post('/api/preparation/order-review')

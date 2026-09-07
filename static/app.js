@@ -843,7 +843,7 @@ async function initializePage() {
     document.querySelector("h1").textContent = "云端准备环境 · 业务禁止";
     document.querySelector(".eyebrow").textContent = "PREPARATION · NOT PRODUCTION";
     el("sessionTitle").textContent = "准备模式，业务禁止";
-    el("sessionMessage").textContent = "未授权登录；本轮不扫码。确认登录也不会恢复业务。";
+    el("sessionMessage").textContent = "仅在有效人工许可窗口允许登录；确认登录也不会恢复业务。";
     el("preparationPanel").hidden = false;
     document.querySelector('main').prepend(el('preparationPanel'));
     for (const id of ['deliveryTitle','autoReplyTitle','safetyTitle']) el(id).textContent = '准备模式：业务禁止';
@@ -870,6 +870,12 @@ async function refreshPreparation() {
   el('preparationStatus').textContent = `模式：${health.mode}；账号：${health.runtime_account_id ?? '未绑定'}；可登录：${health.login_allowed ? '是（需人工操作）' : '否'}；可发送：否；出口：${health.egress.reason}；底层限制：${health.egress.enforcement_verified ? '已有验收记录' : '未验收'}`;
   el('prepareRefresh').disabled = false;
   for (const id of ['prepareLogin','prepareConfirm','prepareSync']) el(id).disabled = !health.login_allowed;
+  el('prepareInventory').disabled = !health.login_allowed;
+  const inventoryResponse = await fetch('/api/preparation/inventory');
+  if (inventoryResponse.ok) {
+    const inventory = await inventoryResponse.json();
+    el('preparationInventoryReport').innerHTML = `<p>读取时间：${escapeHtml(inventory.started_at || '尚未读取')}；页数：${inventory.pages || 0}；完整：${inventory.complete ? '是' : '未确认，不推断下架'}；全部业务仍禁止。</p>` + (inventory.items || []).map(item => `<p>${escapeHtml(item.title)} · ID ${escapeHtml(item.item_id)} · 本地商品 ${escapeHtml(item.local_product || '未匹配')} · 交付包${item.package_clear ? '明确' : '待确认'} · 分享${item.share_registered ? '已登记' : '未登记'} · ${item.fingerprint_missing ? '缺少核验指纹 · ' : ''}待办：${escapeHtml(item.issues.join(' / ') || '待用户批准首批；仍不可发送')}</p>`).join('');
+  }
   const bound = Number.isInteger(health.runtime_account_id);
   el('manualReviewForm').querySelectorAll('input,select,button').forEach(n => { n.disabled = !bound; });
   if (bound) {
@@ -882,6 +888,14 @@ async function refreshPreparation() {
 }
 
 el('prepareRefresh').addEventListener('click', () => refreshPreparation().catch(e => {el('preparationMessage').textContent=e.message;}));
+el('prepareInventory').addEventListener('click', async () => {
+  el('prepareInventory').disabled = true;
+  try {
+    const response = await fetch('/api/preparation/inventory', {method:'POST', headers:{'X-Preparation-Action':'confirm-local'}});
+    el('preparationMessage').textContent = response.ok ? '单次读取已结束，请检查完整性和待办；不会自动发送。' : '读取被拒绝；检查人工确认和许可状态，不自动重试。';
+    await refreshPreparation();
+  } catch (_) { el('preparationMessage').textContent = '连接异常，读取结果未明；不要重复提交，请刷新查看记录。'; }
+});
 for (const [id, action] of [['prepareLogin','start'],['prepareConfirm','confirm'],['prepareSync','sync']]) {
   el(id).addEventListener('click', async () => {
     const response = await fetch('/api/session/'+action, {method:'POST'});
