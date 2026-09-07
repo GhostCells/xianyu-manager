@@ -10,6 +10,55 @@ from .fulfillment_rules import delivery_issues, parse_listing_id
 from .runtime_policy import RuntimeOperationBlocked
 
 
+def diagnose_cards(cards, page, seen):
+    """Observe existing projection rules without changing their output."""
+    from .delivery import inventory_cards_to_raw_items
+    counts = dict.fromkeys(('card_data_parseable', 'status_passed', 'status_excluded',
+                           'invalid_id', 'empty_title', 'invalid_card_data',
+                           'invalid_card', 'same_page_duplicates', 'cross_page_duplicates'), 0)
+    excluded, local = [], set()
+    for card in cards:
+        data = card.get('cardData', {}) if isinstance(card, dict) else None
+        reason = None
+        if not isinstance(card, dict):
+            reason = 'invalid_card'
+        elif not isinstance(data, dict):
+            reason = 'invalid_card_data'
+        else:
+            counts['card_data_parseable'] += 1
+            if str(data.get('itemStatus')) not in {'0', '0.0'}:
+                reason = 'status_excluded'
+            else:
+                counts['status_passed'] += 1
+                item_id = str(data.get('id') or '').strip()
+                if not item_id.isdigit() or len(item_id) < 8:
+                    reason = 'invalid_id'
+                elif not ' '.join(str(data.get('title') or '').split()):
+                    reason = 'empty_title'
+        if reason:
+            counts[reason] += 1
+            if isinstance(data, dict):
+                item_id = str(data.get('id') or '').strip()
+                if item_id.isdigit() and len(item_id) >= 8:
+                    status = data.get('itemStatus')
+                    excluded.append({'item_id': item_id,
+                        'title': ' '.join(str(data.get('title') or '').split())[:160],
+                        'itemStatus': status if isinstance(status, (int, float, bool)) or status is None
+                            else status if isinstance(status, str) and re.fullmatch(r'-?\d+(\.\d+)?', status) else '[unrecognized]',
+                        'exclusion_reason': reason, 'page_number': page})
+    valid = inventory_cards_to_raw_items(cards)
+    for raw in valid:
+        item_id = parse_listing_id(raw['url'])
+        if item_id in local:
+            counts['same_page_duplicates'] += 1
+        elif item_id in seen:
+            counts['cross_page_duplicates'] += 1
+        local.add(item_id)
+    return {'page_number': page, 'raw_cards': len(cards), **counts,
+            'valid_before_dedup': len(valid), 'unique_cumulative': len(seen | local),
+            'excluded': excluded}
+
+
 def match_items(items, products, listings):
     products_by_name = {p['dir_name']: p for p in products}
     result = []
@@ -49,7 +98,7 @@ def latest_report(database, account_id):
     return {'account_id': account_id, 'attempted': False, 'items': [], 'complete': False}
 
 
-async def collect_once(owner, account_id):
+async def collect_once(owner, account_id, frontend_count=None):
     # Deliberately reuse only pure protocol helpers, not DeliveryService methods.
     from .delivery import MTOP_APP_KEY, ITEM_LIST_URL, generate_mtop_sign, inventory_cards_to_raw_items
 
@@ -63,7 +112,10 @@ async def collect_once(owner, account_id):
     path = directory / (approval + '.json')
     report = {'account_id': account_id, 'attempted': True, 'complete': False,
               'started_at': datetime.now(timezone.utc).isoformat(), 'pages': 0,
-              'items': [], 'business_allowed': False, 'status': 'in_progress'}
+              'items': [], 'business_allowed': False, 'status': 'in_progress',
+              'diagnostic_snapshot': True, 'page_diagnostics': [],
+              'pagination_complete': False, 'complete_basis': None,
+              'frontend_expected_count': frontend_count, 'frontend_count_reconciled': False}
     try:
         with path.open('x') as f:
             json.dump(report, f)
@@ -109,12 +161,24 @@ async def collect_once(owner, account_id):
             data = payload.get('data')
             if not isinstance(data, dict) or not isinstance(data.get('cardList'), list):
                 raise RuntimeOperationBlocked('INVENTORY_FORMAT_UNCONFIRMED')
+            diagnostic = diagnose_cards(data['cardList'], page, set(items))
+            # Persist only scalar pagination metadata; opaque cursor objects can
+            # contain account data and must not be copied into diagnostics.
+            for key in ('nextPage', 'nextPageModel', 'nextPageNum'):
+                value = data.get(key)
+                diagnostic[key] = value if value is None or isinstance(value, (bool, int, float)) else {
+                    'redacted': True, 'type': type(value).__name__}
+                diagnostic[key + '_present'] = key in data
+            diagnostic['pagination_ended'] = data.get('nextPage') is False
+            report['page_diagnostics'].append(diagnostic)
             for raw in inventory_cards_to_raw_items(data['cardList']):
                 item_id = parse_listing_id(raw['url'])
                 items[item_id] = {'item_id': item_id, 'title': raw['title']}
             report['pages'] = page
             if data.get('nextPage') is False:
                 report['complete'] = True
+                report['pagination_complete'] = True
+                report['complete_basis'] = 'API_NEXT_PAGE_FALSE'
                 break
             if data.get('nextPage') is not True or not data['cardList']:
                 break
@@ -124,6 +188,14 @@ async def collect_once(owner, account_id):
         # Never persist upstream errors/URLs/cookies or automatically retry verification.
         report['status'] = 'stopped_requires_operator_review'
     finally:
+        pages = report['page_diagnostics']
+        report['totals'] = {key: sum(p[key] for p in pages) for key in (
+            'raw_cards', 'valid_before_dedup', 'status_excluded', 'invalid_id',
+            'empty_title', 'invalid_card_data', 'invalid_card',
+            'same_page_duplicates', 'cross_page_duplicates')}
+        report['totals']['unique_ids'] = len(items)
+        report['frontend_count_reconciled'] = bool(report['pagination_complete']
+            and frontend_count is not None and len(items) == frontend_count)
         with owner.database.connect() as connection:
             listings = [dict(row) for row in connection.execute(
                 'SELECT item_id,matched_product_dir_name FROM account_listings WHERE account_id=?',

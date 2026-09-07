@@ -477,14 +477,14 @@ class BrowserSessionManager:
         self._handoff_storage_state = None
         return state
 
-    async def read_preparation_inventory(self, account_id: int):
+    async def read_preparation_inventory(self, account_id: int, frontend_count=None):
         from .preparation_inventory import collect_once
         self.runtime_policy.require_login(account_id)
         async with self._lock:
             if (self._account_id != account_id or self._context is None
                     or self._handoff_account_id != account_id):
                 raise RuntimeOperationBlocked('MANUAL_LOGIN_CONFIRMATION_REQUIRED')
-            return await collect_once(self, account_id)
+            return await collect_once(self, account_id, frontend_count)
 
     @login_operation
     async def cancel_login(self, account_id: int) -> dict[str, object]:

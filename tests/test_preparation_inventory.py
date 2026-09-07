@@ -7,7 +7,54 @@ from unittest.mock import AsyncMock
 import pytest
 
 from xianyu_manager.database import Database
-from xianyu_manager.preparation_inventory import collect_once, match_items
+from xianyu_manager.preparation_inventory import collect_once, match_items, diagnose_cards
+
+
+def card(i, **fields):
+    return {'cardData': {'id': str(123456780 + i), 'title': 'synthetic', 'itemStatus': 0, **fields}}
+
+
+def test_diagnostic_exclusions_and_duplicates():
+    cards = [card(0), card(0), card(1), card(2, itemStatus=1),
+             card(3, id='invalid'), card(4, title=''), {'cardData': None}, None]
+    d = diagnose_cards(cards, 2, {'123456781'})
+    for key in ('status_excluded', 'invalid_id', 'empty_title', 'invalid_card_data',
+                'invalid_card', 'same_page_duplicates', 'cross_page_duplicates'):
+        assert d[key] == 1
+    assert d['raw_cards'] == 8 and d['valid_before_dedup'] == 3
+    assert d['unique_cumulative'] == 2
+    assert len(d['excluded']) == 2
+
+
+def test_raw_34_filtered_31_with_separate_completeness(owner):
+    obj, response = owner
+    response.json.return_value['data']['cardList'] = [card(i) for i in range(31)] + [
+        card(31, itemStatus=1), card(32, itemStatus=2), card(33, title='')]
+    report = asyncio.run(collect_once(obj, 2, 34))
+    assert report['pagination_complete'] and not report['frontend_count_reconciled']
+    assert report['totals']['raw_cards'] == 34
+    assert report['totals']['unique_ids'] == 31
+    assert report['totals']['status_excluded'] == 2
+    assert report['totals']['empty_title'] == 1
+
+
+def test_diagnostic_cross_page_and_cursor_redaction(owner):
+    obj, response = owner
+    response.json.side_effect = [
+        {'ret': ['SUCCESS::ok'], 'data': {'cardList': [card(0)], 'nextPage': True,
+            'nextPageModel': {'private': 'must-not-persist'}, 'nextPageNum': 2}},
+        {'ret': ['SUCCESS::ok'], 'data': {'cardList': [card(0), card(1)], 'nextPage': False}}]
+    report = asyncio.run(collect_once(obj, 2, 2))
+    assert report['pages'] == 2 and report['frontend_count_reconciled']
+    assert report['totals']['cross_page_duplicates'] == 1
+    assert 'must-not-persist' not in json.dumps(report)
+
+
+def test_missing_next_page_not_complete(owner):
+    obj, response = owner
+    del response.json.return_value['data']['nextPage']
+    report = asyncio.run(collect_once(obj, 2, 1))
+    assert not report['pagination_complete'] and not report['frontend_count_reconciled']
 from xianyu_manager.runtime_policy import RuntimeOperationBlocked, RuntimePolicy
 from xianyu_manager.session import BrowserSessionManager
 

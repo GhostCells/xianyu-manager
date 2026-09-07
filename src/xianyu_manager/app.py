@@ -485,10 +485,12 @@ def preparation_inventory_report():
 
 
 @app.post('/api/preparation/inventory')
-async def preparation_inventory_read():
+async def preparation_inventory_read(frontend_count: int | None = None):
     try:
         runtime_policy.preparation_permission('inventory_once')
-        return await session_manager.read_preparation_inventory(runtime_policy.account_id)
+        if frontend_count is not None and not 0 <= frontend_count <= 10000:
+            raise HTTPException(status_code=422, detail='INVALID_FRONTEND_COUNT')
+        return await session_manager.read_preparation_inventory(runtime_policy.account_id, frontend_count)
     except RuntimeOperationBlocked as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
