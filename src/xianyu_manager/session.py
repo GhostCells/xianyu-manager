@@ -305,7 +305,7 @@ class BrowserSessionManager:
         """
         async with self._lock:
             account = self.database.get_account(account_id)
-            if account is None or not account["is_active"]:
+            if not self.runtime_policy.reply_account_selected(account, account_id):
                 raise ValueError("只能连接当前账号")
             if self.browser_executable is None or not self.browser_executable.is_file():
                 raise RuntimeError("没有找到 Chrome 或 Edge")

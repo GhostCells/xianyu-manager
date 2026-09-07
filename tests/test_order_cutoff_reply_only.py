@@ -264,6 +264,34 @@ def test_reply_launcher_requires_explicit_flag_and_bound_policy():
             launcher.validate_policy(invalid, reply_only=True)
 
 
+def test_reply_only_selected_inactive_record_does_not_require_db_activation(db, monkeypatch):
+    from pathlib import Path
+    from xianyu_manager.session import BrowserSessionManager
+    service, account = make_service(db, RuntimePolicy())
+    policy = RuntimePolicy(reply_only=True, account_id=account)
+    monkeypatch.setattr(RuntimePolicy, 'require_egress', lambda self: None)
+    service.runtime_policy = policy
+    with db.connect() as c:
+        c.execute('UPDATE accounts SET is_active=0 WHERE id=?', (account,))
+    db.update_auto_reply_settings(account, {'enabled': True})
+    service.browser_executable = Path(__file__)
+    monkeypatch.setattr(service.secret_store, 'has_secret', lambda: True)
+    monkeypatch.setattr(service, '_run', AsyncMock())
+    owner = BrowserSessionManager(db.path.parent / 'profiles', Path(__file__), db, runtime_policy=policy)
+    sentinel = RuntimeError('reached approved owner, no browser launched')
+    monkeypatch.setattr(owner, '_launch_visible_browser', AsyncMock(side_effect=sentinel))
+    async def run():
+        await service.start_auto_reply(account)
+        await service._task
+        with pytest.raises(RuntimeError, match='reached approved owner'):
+            await owner.ensure_runtime_context(account)
+    asyncio.run(run())
+    assert db.get_account(account)['is_active'] is False
+    assert policy.reply_account_selected(db.get_account(account), account)
+    assert not policy.reply_account_selected(db.get_account(account), account + 1)
+    assert not RuntimePolicy(reply_only=True).reply_account_selected(db.get_account(account), account)
+
+
 @pytest.mark.parametrize('case', ['missing', 'duplicate', 'wrong_buyer', 'unpaid'])
 def test_platform_payment_lookup_fails_closed(db, monkeypatch, case):
     service, account = make_service(db, RuntimePolicy(order_cutoff_at='2020-01-01T00:00:00Z'))

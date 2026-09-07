@@ -29,6 +29,7 @@
 `XIANYU_MANAGER_REPLY_ONLY=true`要求显式ACCOUNT_ID。它是不可由UI开启发货的进程级限制，派生 `fulfillment_enabled=false` 和 `order_recovery_enabled=false`；数据库遗留delivery_enabled不能覆盖。正常聊天仍由原DeliveryService和唯一BrowserSessionManager拥有，非另建浏览器架构。
 
 - WebSocket启动不创建恢复任务，订单/付款/免拼事件不分派；直接调用补偿、确认或发货入口也拒绝。
+- reply-only的回复启动及共享owner依据显式运行账号，不要求把历史`is_active=0`改成1；不激活账号，不修改账号1，不放宽完整发货的现有账号条件。
 - 新聊天精确匹配账号与完整listing ID，要求非空安全knowledge；与分享人工核验解耦。生成后再次核对映射和knowledge，保留回复claim、限额、ACK与幂等。
 - reply-only忽略本连接建立之前或没有可靠消息时间的聊天，不把历史聊天重放当新咨询。该聊天门槛不是订单cutoff。
 - selection API（含internal bridge）、浏览器搜索/详情及scheduler入口拒绝。

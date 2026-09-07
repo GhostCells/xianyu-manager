@@ -776,7 +776,7 @@ class DeliveryService:
     ) -> dict[str, object]:
         async with self._lock:
             account = self.database.get_account(account_id)
-            if account is None or not account["is_active"]:
+            if not self.runtime_policy.reply_account_selected(account, account_id):
                 raise ValueError("只能启动当前账号的自动回复")
             if account.get("binding_status") != "bound":
                 raise ValueError("闲鱼账号尚未绑定或登录已失效")

@@ -63,6 +63,13 @@ class RuntimePolicy:
         if self.reply_only:
             raise RuntimeOperationBlocked('REPLY_ONLY_SELECTION_FORBIDDEN')
 
+    def reply_account_selected(self, account, account_id):
+        """Explicit reply-only binding is not a mutation of legacy is_active."""
+        return bool(account and not account.get('is_archived') and (
+            self.account_id == account_id if self.reply_only
+            else account.get('is_active')
+        ))
+
     def egress_status(self):
         result = {
             "ready": False,
