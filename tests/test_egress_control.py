@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import time
+import subprocess
 
 import pytest
 from xianyu_manager import egress_control as control
@@ -197,6 +198,32 @@ def test_update_failure_revokes_and_marks_blocked(producer, monkeypatch):
     assert not writes[control.STATE]["enforcement_verified"]
 
 
+def test_transient_curl_failure_revokes_then_can_reobserve(producer, monkeypatch):
+    writes, leases = producer
+    original = control.observe
+    def fail():
+        raise subprocess.CalledProcessError(28, ['curl','secret-url'], stderr='SECRET')
+    monkeypatch.setattr(control,'observe',fail)
+    assert not control.update_once()
+    assert leases == [False]
+    assert writes[control.STATE]['transient'] is True
+    assert control.LATCH not in writes
+    assert 'SECRET' not in json.dumps(writes[control.STATE])
+    monkeypatch.setattr(control,'observe',original)
+    assert control.update_once()
+    assert leases == [False, True]
+
+
+@pytest.mark.parametrize('command,code,stage,transient', [
+    ('curl',6,'observe',True),('curl',28,'observe',True),
+    ('curl',22,'observe',False),('nft',1,'write_lease',False),
+    ('tailscale',1,'observe',False),('curl',28,'write_state',False)])
+def test_only_known_transport_errors_retry(command,code,stage,transient):
+    d=control.failure_diagnostic(subprocess.CalledProcessError(code,[command,'SECRET'],stderr='SECRET'),stage)
+    assert d['transient'] is transient
+    assert 'SECRET' not in json.dumps(d)
+
+
 def test_status_write_failure_revokes_just_renewed_lease(producer, monkeypatch):
     _, leases = producer
     monkeypatch.setattr(
@@ -255,7 +282,9 @@ def test_scoped_deployment_contract():
         "RestrictNamespaces=user pid net" in service and "CapabilityBoundingSet=\n" in service
     )
     assert "TemporaryFileSystem=/tmp:mode=1777 /run" in service
-    assert "Restart=no" in (root / "xianyu-egress.service").read_text()
+    updater = (root / "xianyu-egress.service").read_text()
+    assert "Restart=on-failure" in updater and "RestartPreventExitStatus=1" in updater
+    assert "StartLimitBurst=3" in updater
 
 
 def test_uds_launch_is_opt_in_and_does_not_remove_login_lock(monkeypatch):

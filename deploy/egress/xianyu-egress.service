@@ -1,4 +1,6 @@
 [Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=3
 Description=Root-owned egress observation and short kernel lease
 After=tailscaled.service
 ConditionPathExists=/run/netns/xianyu-business
@@ -14,7 +16,9 @@ RuntimeDirectoryPreserve=yes
 StateDirectory=xianyu-egress
 StateDirectoryMode=0755
 UMask=0022
-Restart=no
+Restart=on-failure
+RestartSec=15
+RestartPreventExitStatus=1
 TimeoutStopSec=12
 NoNewPrivileges=true
 ProtectSystem=strict

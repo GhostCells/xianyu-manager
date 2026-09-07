@@ -288,6 +288,8 @@ def observe():
             "tailscale0",
             "-4",
             "-fsS",
+            "--connect-timeout",
+            "2",
             "--max-time",
             "6",
             "https://icanhazip.com",
@@ -312,6 +314,7 @@ def update_once():
     observation = {}
     reason = "UPDATE_FAILED"
     started = time.monotonic()
+    stage = 'read_approval'
     try:
         approval = read_root_json(APPROVAL)
         latched = read_root_json(LATCH).get("approval_id") if LATCH.exists() else None
@@ -320,6 +323,7 @@ def update_once():
         elif latched == approval["approval_id"]:
             reason = "EXPLICIT_REVIEW_REQUIRED"
         else:
+            stage = 'observe'
             observation = observe()
             reason = evaluate(
                 approval, observation, latched, now=time.time(), boot=boot_id()
@@ -327,6 +331,7 @@ def update_once():
         if time.monotonic() - started > 10:
             reason = "OBSERVATION_TOO_SLOW"
         allowed = reason == "EGRESS_READY"
+        stage = 'write_lease'
         set_lease(allowed)
         if not allowed:
             atomic_root_json(
@@ -349,8 +354,11 @@ def update_once():
             "enforcement_verified": allowed,
             "reason": reason,
         }
+        stage = 'write_state'
         atomic_root_json(STATE, data)
-    except Exception:
+    except Exception as exc:
+        diagnostic = failure_diagnostic(exc, stage)
+        print(json.dumps({'event': 'EGRESS_UPDATE_FAILED', **diagnostic}), flush=True)
         # Do not log raw command output/environment. A failed write must also revoke
         # the kernel lease; if revocation fails, its 30-second timeout still bounds it.
         try:
@@ -358,10 +366,11 @@ def update_once():
         except Exception:
             pass
         try:
-            atomic_root_json(
-                LATCH,
-                {"approval_id": approval.get("approval_id"), "reason": "UPDATE_FAILED"},
-            )
+            if not diagnostic['transient']:
+                atomic_root_json(
+                    LATCH,
+                    {"approval_id": approval.get("approval_id"), "reason": "UPDATE_FAILED", **diagnostic},
+                )
         except Exception:
             pass
         try:
@@ -371,12 +380,29 @@ def update_once():
                     "review_required": True,
                     "enforcement_verified": False,
                     "reason": "UPDATE_FAILED",
+                    **diagnostic,
                 },
             )
         except Exception:
             pass
         return False
     return allowed
+
+
+def failure_diagnostic(exc, stage):
+    """Never emit stderr, URLs, command arguments, payloads or exception text."""
+    command = ''
+    code = None
+    if isinstance(exc, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+        args = exc.cmd
+        if isinstance(args, (list, tuple)) and args:
+            name = Path(str(args[0])).name
+            command = name if name in {'curl','ip','nft','tailscale','systemctl'} else 'other'
+        code = getattr(exc, 'returncode', None)
+    transient = stage == 'observe' and command == 'curl' and (
+        isinstance(exc, subprocess.TimeoutExpired) or code in {5,6,7,28,35,52,55,56})
+    return {'stage': stage, 'exception_type': type(exc).__name__,
+            'command': command, 'exit_code': code, 'transient': transient}
 
 
 def main():
@@ -405,6 +431,11 @@ def main():
     while True:
         if not update_once():
             print("EGRESS_BLOCKED; MANUAL_REVIEW_REQUIRED", flush=True)
+            try:
+                if read_root_json(STATE).get('transient') is True:
+                    raise SystemExit(75)
+            except (OSError, ValueError):
+                pass
             raise SystemExit(1)
         if not announced:
             print("EGRESS_READY", flush=True)
