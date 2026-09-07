@@ -147,6 +147,10 @@ def approval_valid(approval, *, now, boot):
                  and approval.get('account_id') == 2
                  and approval.get('operations') == ['login', 'reply']
                  and approval.get('expires_at') is None)
+                or (approval.get('lifecycle') == 'resident_mvp'
+                    and approval.get('account_id') == 2
+                    and approval.get('operations') == ['login', 'reply', 'delivery']
+                    and approval.get('expires_at') is None)
                 or (approval.get('lifecycle', 'window') == 'window'
                     and 0 < float(approval["expires_at"]) - now <= 86400)
             )

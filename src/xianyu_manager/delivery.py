@@ -655,6 +655,8 @@ class DeliveryService:
     @business_operation
     async def reconcile_order(self, order_id: str) -> dict[str, object]:
         """Recover one explicitly selected paid order from the seller order list."""
+        if self.runtime_policy.mvp_fulfillment:
+            raise ValueError('MVP_HISTORICAL_RECONCILIATION_FORBIDDEN')
         self.runtime_policy.require_fulfillment()
         normalized_order_id = str(order_id or "").strip()
         cookie_map = self._runtime_cookie_map
@@ -714,6 +716,8 @@ class DeliveryService:
 
     @business_operation
     async def retry_platform_confirmation(self, order_id, account_id, cookie_map):
+        if self.runtime_policy.mvp_fulfillment:
+            raise ValueError('MVP_HISTORICAL_CONFIRMATION_FORBIDDEN')
         self.runtime_policy.require_fulfillment()
         account = self.database.get_account(account_id)
         order = self.database.get_order(order_id)
@@ -885,7 +889,7 @@ class DeliveryService:
         self.runtime_policy.require_fulfillment()
         async with self._lock:
             account = self.database.get_account(account_id)
-            if account is None or not account["is_active"]:
+            if not self.runtime_policy.reply_account_selected(account, account_id):
                 raise ValueError("只能启动当前账号的自动发货")
             if account.get("binding_status") != "bound":
                 raise ValueError("闲鱼账号尚未绑定或登录已失效")
@@ -898,6 +902,7 @@ class DeliveryService:
                 and product["listing_status"] == "published"
                 and not delivery_issues(product)
                 and listing_item_id(str(product["listing_url"]))
+                and (not self.runtime_policy.mvp_fulfillment or listing_item_id(str(product['listing_url'])) in self.runtime_policy.fulfillment_items)
             ]
             if not ready_products:
                 raise ValueError("没有同时满足已上架、已验证网盘链接条件的商品")
@@ -1469,7 +1474,7 @@ class DeliveryService:
                         )
                     )
                 else:
-                    if self.runtime_policy.reply_only:
+                    if self.runtime_policy.reply_only or self.runtime_policy.mvp_fulfillment:
                         event_ms = extract_event_timestamp_ms(event)
                         if event_ms is None or event_ms <= getattr(self, '_reply_listen_started_ms', int(time.time() * 1000)):
                             continue
@@ -1734,7 +1739,7 @@ class DeliveryService:
             if product is None:
                 self.database.mark_chat_message(message_id, "manual", "商品映射已变化，转人工处理")
                 return
-            if self.runtime_policy.reply_only:
+            if self.runtime_policy.reply_only or self.runtime_policy.mvp_fulfillment:
                 from .knowledge import sanitize_product_knowledge
                 if self._account_id != account_id or not sanitize_product_knowledge(str(product.get('knowledge_text') or '')):
                     self.database.mark_chat_message(message_id, 'manual', 'REPLY_ACCOUNT_OR_KNOWLEDGE_NOT_READY')
@@ -1834,6 +1839,8 @@ class DeliveryService:
         cookie_map: dict[str, str],
         event: dict[str, Any],
     ) -> None:
+        if self.runtime_policy.mvp_fulfillment:
+            return
         if not self.runtime_policy.fulfillment_enabled:
             return
         self.runtime_policy.require_fulfillment()
@@ -1883,6 +1890,7 @@ class DeliveryService:
             )
             return
 
+        self.runtime_policy.require_delivery_item(item_id)
         product = self.database.get_product_by_listing_item_id(item_id, account_id)
         if product is None:
             self._last_error = "检测到待刀成订单，但没有唯一匹配的当前账号商品，未执行免拼"
@@ -1930,7 +1938,7 @@ class DeliveryService:
         self.runtime_policy.require_fulfillment()
         self._last_event_at = time.strftime("%Y-%m-%d %H:%M:%S")
         account = self.database.get_account(account_id)
-        if (not account or not account.get("delivery_enabled") or not account.get("is_active")
+        if (not account or not account.get("delivery_enabled") or not self.runtime_policy.reply_account_selected(account, account_id)
                 or account.get("binding_status") != "bound" or self._account_id != account_id):
             return
         fingerprint = hashlib.sha256(
@@ -1970,6 +1978,7 @@ class DeliveryService:
             )
             return
 
+        self.runtime_policy.require_delivery_item(item_id)
         product = self.database.get_product_by_listing_item_id(item_id, account_id)
         if product is None:
             self._last_error = "检测到付款订单，但没有唯一匹配的已上架商品，已停止自动发送"
@@ -2080,6 +2089,8 @@ class DeliveryService:
         async with self._outbound_lock:
             if kind == 'delivery':
                 self.runtime_policy.require_fulfillment()
+                order = self.database.get_order(reference[6:]) if reference.startswith('order:') else None
+                self.runtime_policy.require_delivery_item((order or {}).get('listing_item_id'))
                 from .order_cutoff import require_after_cutoff
                 require_after_cutoff(self.runtime_policy.order_cutoff_at, payment_time)
             if kind == "delivery" and (self._account_id != account_id or not reference.startswith("order:") or not self.database.validate_delivery_claim(reference[6:], account_id, chat_id, text, buyer_id=buyer_id)):

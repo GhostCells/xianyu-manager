@@ -26,9 +26,15 @@ def listen_arguments():
     return ["--uds", uds]
 
 
-def validate_policy(policy, *, reply_only=False):
+def validate_policy(policy, *, reply_only=False, mvp=False):
     # Starting the API never starts a browser. Login additionally requires a
     # fresh root manual-window capability in RuntimePolicy at every operation.
+    if mvp:
+        if policy.mode != 'normal' or not policy.mvp_fulfillment or policy.account_id != 2 or policy.order_recovery_enabled or not policy.fulfillment_items:
+            raise SystemExit('MVP_POLICY_REQUIRED')
+        from xianyu_manager.order_cutoff import utc_time
+        utc_time(policy.order_cutoff_at, field='ORDER_CUTOFF')
+        return
     if reply_only:
         if (policy.mode != 'normal' or not policy.reply_only or policy.account_id is None
                 or policy.fulfillment_enabled or policy.order_recovery_enabled):
@@ -38,9 +44,9 @@ def validate_policy(policy, *, reply_only=False):
         raise SystemExit('PREPARATION_LAUNCHER_REQUIRES_PREPARE_AND_EXPLICIT_ACCOUNT')
 
 
-def main(*, reply_only=False):
-    validate_policy(PROCESS_POLICY, reply_only=reply_only)
-    if not reply_only and os.environ.get("SILICONFLOW_API_KEY"):
+def main(*, reply_only=False, mvp=False):
+    validate_policy(PROCESS_POLICY, reply_only=reply_only, mvp=mvp)
+    if not (reply_only or mvp) and os.environ.get("SILICONFLOW_API_KEY"):
         raise SystemExit("PREPARATION_MUST_NOT_HAVE_LLM_SECRET")
     log = logging.getLogger("preparation")
     log.setLevel(logging.INFO)
@@ -100,6 +106,6 @@ def main(*, reply_only=False):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] not in ([], ['--reply-only']):
+    if sys.argv[1:] not in ([], ['--reply-only'], ['--mvp']):
         raise SystemExit('UNSUPPORTED_LAUNCH_MODE')
-    raise SystemExit(main(reply_only=sys.argv[1:] == ['--reply-only']))
+    raise SystemExit(main(reply_only=sys.argv[1:] == ['--reply-only'], mvp=sys.argv[1:] == ['--mvp']))

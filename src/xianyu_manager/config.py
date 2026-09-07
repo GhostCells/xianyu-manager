@@ -29,6 +29,8 @@ class Settings:
     reply_only: bool = False
     order_cutoff_at: str = ''
     resident_reply: bool = False
+    mvp_fulfillment: bool = False
+    fulfillment_items: tuple[str, ...] = ()
 
 
 def _parse_bool(value: str, *, name: str, default: bool) -> bool:
@@ -148,9 +150,19 @@ def read_runtime_options() -> dict:
     if reply_only and account is None:
         raise ValueError('REPLY_ONLY requires ACCOUNT_ID')
     resident = _parse_bool(os.environ.get('XIANYU_MANAGER_RESIDENT_REPLY', ''), name='XIANYU_MANAGER_RESIDENT_REPLY', default=False)
-    if resident and (not reply_only or prepare or account is None or not login):
+    mvp = _parse_bool(os.environ.get('XIANYU_MANAGER_MVP_FULFILLMENT', ''), name='XIANYU_MANAGER_MVP_FULFILLMENT', default=False)
+    items = tuple(x.strip() for x in os.environ.get('XIANYU_MANAGER_FULFILLMENT_ITEMS', '').split(',') if x.strip())
+    if any(not x.isascii() or not x.isdigit() for x in items) or len(set(items)) != len(items):
+        raise ValueError('FULFILLMENT_ITEMS must be unique complete numeric IDs')
+    if resident and (not (reply_only or mvp) or prepare or account is None or not login):
         raise ValueError('RESIDENT_REPLY requires reply-only, explicit account and login authorization')
     cutoff = os.environ.get('XIANYU_MANAGER_ORDER_CUTOFF_AT', '').strip()
+    if mvp:
+        from .order_cutoff import utc_time
+        if reply_only or prepare or account != 2 or not resident or not items:
+            raise ValueError('MVP_FULFILLMENT requires resident account2, nonempty allowlist and normal mode')
+        utc_time(cutoff, field='ORDER_CUTOFF')
     return dict(prepare_mode=prepare, account_id=account, login_authorized=login,
                 reply_only=reply_only, resident_reply=resident, order_cutoff_at=cutoff,
+                mvp_fulfillment=mvp, fulfillment_items=items,
                 egress_status_path=Path(path) if path else None)

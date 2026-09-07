@@ -2123,14 +2123,13 @@ class Database:
             return None
         return product
 
-    @staticmethod
-    def _account_can_deliver(connection, account_id, chat_id):
+    def _account_can_deliver(self, connection, account_id, chat_id):
         account = connection.execute(
             "SELECT * FROM accounts WHERE id=?", (account_id,)
         ).fetchone()
         return bool(
             account
-            and account["is_active"]
+            and (self.runtime_account_id == account_id if self.runtime_account_id is not None else account["is_active"])
             and not account["is_archived"]
             and account["binding_status"] == "bound"
             and account["delivery_enabled"]

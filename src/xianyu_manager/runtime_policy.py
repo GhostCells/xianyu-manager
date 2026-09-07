@@ -28,6 +28,8 @@ class RuntimePolicy:
     reply_only: bool = False
     order_cutoff_at: str = ''
     resident_reply: bool = False
+    mvp_fulfillment: bool = False
+    fulfillment_items: tuple[str, ...] = ()
     _state: dict = field(default_factory=dict, compare=False, repr=False)
 
     @property
@@ -50,7 +52,11 @@ class RuntimePolicy:
 
     @property
     def order_recovery_enabled(self):
-        return self.fulfillment_enabled
+        return self.fulfillment_enabled and not self.mvp_fulfillment
+
+    def require_delivery_item(self, item_id):
+        if self.mvp_fulfillment and str(item_id) not in self.fulfillment_items:
+            raise RuntimeOperationBlocked('FULFILLMENT_ITEM_NOT_ALLOWED')
 
     def require_fulfillment(self):
         self.require_business()
@@ -61,13 +67,13 @@ class RuntimePolicy:
 
     def require_selection(self):
         self.require_business()
-        if self.reply_only:
+        if self.reply_only or self.mvp_fulfillment:
             raise RuntimeOperationBlocked('REPLY_ONLY_SELECTION_FORBIDDEN')
 
     def reply_account_selected(self, account, account_id):
         """Explicit reply-only binding is not a mutation of legacy is_active."""
         return bool(account and not account.get('is_archived') and (
-            self.account_id == account_id if self.reply_only
+            self.account_id == account_id if self.reply_only or self.mvp_fulfillment
             else account.get('is_active')
         ))
 
@@ -167,6 +173,8 @@ class RuntimePolicy:
             "reply_enabled": self.mode == 'normal',
             "fulfillment_enabled": self.fulfillment_enabled,
             "order_recovery_enabled": self.order_recovery_enabled,
+            "mvp_fulfillment": self.mvp_fulfillment,
+            "fulfillment_items": list(self.fulfillment_items),
             "order_cutoff_configured": bool(self.order_cutoff_at),
             "safe_mode": self.safe_mode,
             "prepare_mode": self.mode == "prepare",

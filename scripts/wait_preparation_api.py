@@ -6,7 +6,7 @@ import time
 import sys
 
 
-def main(*, reply_only=False):
+def main(*, reply_only=False, mvp=False):
     for _ in range(45):
         connection = http.client.HTTPConnection('localhost', timeout=2)
         try:
@@ -18,9 +18,15 @@ def main(*, reply_only=False):
             response = connection.getresponse()
             body = json.loads(response.read())
             assert response.status == 200
-            assert body['mode'] == ('normal' if reply_only else 'prepare')
+            assert body['mode'] == ('normal' if reply_only or mvp else 'prepare')
             assert body['runtime_account_id'] == 2
-            if reply_only:
+            if mvp:
+                assert body['mvp_fulfillment'] is True
+                assert body['fulfillment_enabled'] is True
+                assert body['order_recovery_enabled'] is False
+                assert body['order_cutoff_configured'] is True
+                assert body['fulfillment_items']
+            elif reply_only:
                 assert body['reply_only'] is True
                 assert body['fulfillment_enabled'] is False
                 assert body['order_recovery_enabled'] is False
@@ -36,6 +42,6 @@ def main(*, reply_only=False):
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] not in ([], ['--reply-only']):
+    if sys.argv[1:] not in ([], ['--reply-only'], ['--mvp']):
         raise SystemExit('UNSUPPORTED_READINESS_MODE')
-    main(reply_only=sys.argv[1:] == ['--reply-only'])
+    main(reply_only=sys.argv[1:] == ['--reply-only'], mvp=sys.argv[1:] == ['--mvp'])

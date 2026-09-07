@@ -3,9 +3,10 @@ import asyncio
 
 
 async def restore_reply_owner(policy, session, delivery, database, *, wait=asyncio.sleep):
-    if not policy.resident_reply or policy.mode != 'normal' or not policy.reply_only:
+    mvp = getattr(policy, 'mvp_fulfillment', False)
+    if not policy.resident_reply or policy.mode != 'normal' or not (policy.reply_only or mvp):
         return 'disabled'
-    if policy.fulfillment_enabled or policy.order_recovery_enabled:
+    if (policy.fulfillment_enabled and not mvp) or policy.order_recovery_enabled:
         raise RuntimeError('RESIDENT_REPLY_POLICY_INVALID')
     # Do not latch a startup race before the root producer has inspected this PID.
     for _ in range(60):

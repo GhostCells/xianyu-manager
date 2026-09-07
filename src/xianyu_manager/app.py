@@ -38,7 +38,8 @@ settings = load_settings()
 runtime_policy = RuntimePolicy(settings.safe_mode, settings.prepare_mode, settings.account_id,
                                settings.login_authorized, settings.egress_status_path,
                                reply_only=settings.reply_only, order_cutoff_at=settings.order_cutoff_at,
-                               resident_reply=settings.resident_reply)
+                               resident_reply=settings.resident_reply,
+                               mvp_fulfillment=settings.mvp_fulfillment, fulfillment_items=settings.fulfillment_items)
 database = Database(settings.database_path, safe_mode=settings.safe_mode,
                     prepare_mode=settings.prepare_mode, runtime_account_id=settings.account_id)
 secret_store = SecretStore(settings.auto_reply_secret_path)
@@ -84,7 +85,7 @@ async def lifespan(_: FastAPI):
     resident = asyncio.create_task(restore_resident()) if runtime_policy.resident_reply else None
     # Reply-only acceptance starts explicitly after API + egress readiness.
     # Persisted switches must not reopen a test window on service restart.
-    if runtime_policy.mode == 'normal' and not runtime_policy.reply_only:
+    if runtime_policy.mode == 'normal' and not runtime_policy.reply_only and not runtime_policy.resident_reply:
         await delivery_service.start_if_enabled()
     async def watch_egress():
         while True:
