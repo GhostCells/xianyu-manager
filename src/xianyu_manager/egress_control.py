@@ -231,7 +231,7 @@ def runtime_verified():
     return True
 
 
-def observe():
+def observe(*, probe_public=True):
     ts = json.loads(run("tailscale", "status", "--json"))
     selected = [v for v in ts.get("Peer", {}).values() if v.get("ExitNode")]
     peer = selected[0] if len(selected) == 1 else {}
@@ -293,7 +293,7 @@ def observe():
             "--max-time",
             "6",
             "https://icanhazip.com",
-        ).strip(),
+        ).strip() if probe_public else None,
         "path_kind": (
             "direct"
             if peer.get("CurAddr")
@@ -353,12 +353,34 @@ def update_once():
             "review_required": not allowed,
             "enforcement_verified": allowed,
             "reason": reason,
+            "consecutive_transient_failures": 0,
         }
         stage = 'write_state'
         atomic_root_json(STATE, data)
     except Exception as exc:
         diagnostic = failure_diagnostic(exc, stage)
         print(json.dumps({'event': 'EGRESS_UPDATE_FAILED', **diagnostic}), flush=True)
+        if diagnostic['transient']:
+            try:
+                previous = read_root_json(STATE)
+                count = int(previous.get('consecutive_transient_failures', 0)) + 1
+                if (clock_valid(previous) and previous.get('enforcement_verified') is True
+                        and previous.get('review_required') is False
+                        and previous.get('approval_id') == approval.get('approval_id')
+                        and count < 3):
+                    local = observe(probe_public=False)
+                    local['observed_public_ip'] = previous.get('observed_public_ip')
+                    if evaluate(approval, local, latched, now=time.time(), boot=boot_id()) != 'EGRESS_READY':
+                        raise ValueError('LOCAL_EVIDENCE_CHANGED')
+                    # Keep the ORIGINAL 20s deadline. Never renew the 30s kernel
+                    # lease or turn a failed probe into a fresh successful check.
+                    atomic_root_json(STATE, {**previous, 'reason':'EGRESS_DEGRADED',
+                        'consecutive_transient_failures':count, **diagnostic})
+                    print('EGRESS_DEGRADED; ORIGINAL_DEADLINE_UNCHANGED', flush=True)
+                    return True
+            except Exception:
+                # Unverifiable local evidence or damaged state gets no grace.
+                diagnostic['transient'] = False
         # Do not log raw command output/environment. A failed write must also revoke
         # the kernel lease; if revocation fails, its 30-second timeout still bounds it.
         try:
@@ -440,7 +462,11 @@ def main():
         if not announced:
             print("EGRESS_READY", flush=True)
             announced = True
-        time.sleep(5)
+        try:
+            degraded = read_root_json(STATE).get('reason') == 'EGRESS_DEGRADED'
+        except (OSError, ValueError):
+            degraded = False
+        time.sleep(2 if degraded else 5)
 
 
 if __name__ == "__main__":

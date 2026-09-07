@@ -87,14 +87,33 @@ async def lifespan(_: FastAPI):
     # Persisted switches must not reopen a test window on service restart.
     if runtime_policy.mode == 'normal' and not runtime_policy.reply_only and not runtime_policy.resident_reply:
         await delivery_service.start_if_enabled()
+    from .egress_recovery import RecoveryGate, recovery_allowed
+    recovery = RecoveryGate()
     async def watch_egress():
+        nonlocal resident
         while True:
             await asyncio.sleep(2)
             if runtime_policy.managed and not runtime_policy.egress_status()['ready']:
                 if delivery_service._task is not None or session_manager._context is not None:
                     runtime_policy._state['egress_latched'] = True
+                    recovery.block()
+                    if resident and not resident.done():
+                        resident.cancel()
+                        try:
+                            await resident
+                        except asyncio.CancelledError:
+                            pass
                     await delivery_service.shutdown()
                     await session_manager.shutdown()
+                raw = runtime_policy.egress_status(ignore_local_latch=True)
+                if not raw['ready'] or raw.get('probe_state') != 'EGRESS_READY':
+                    if recovery.blocked:
+                        recovery.block()
+                elif (recovery_allowed(runtime_policy)
+                      and (resident is None or resident.done())
+                      and recovery.ready(checked_at=raw['checked_at'], now=asyncio.get_running_loop().time())):
+                    runtime_policy._state['egress_latched'] = False
+                    resident = asyncio.create_task(restore_resident())
     guard = asyncio.create_task(watch_egress()) if runtime_policy.managed and not runtime_policy.safe_mode else None
     try:
         yield

@@ -77,7 +77,7 @@ class RuntimePolicy:
             else account.get('is_active')
         ))
 
-    def egress_status(self):
+    def egress_status(self, *, ignore_local_latch=False):
         result = {
             "ready": False,
             "reason": "EGRESS_UNKNOWN",
@@ -104,7 +104,7 @@ class RuntimePolicy:
                 and data.get("observed_public_ip") == data.get("reviewed_public_ip")
             )
             return {
-                "ready": ready and not self._state.get("egress_latched", False),
+                "ready": ready and (ignore_local_latch or not self._state.get("egress_latched", False)),
                 "reason": (
                     "EGRESS_RESTART_REVIEW_REQUIRED"
                     if self._state.get("egress_latched")
@@ -112,6 +112,7 @@ class RuntimePolicy:
                 ),
                 "enforcement_verified": data.get("enforcement_verified") is True,
                 "checked_at": data.get("checked_at"),
+                "probe_state": data.get('reason'),
                 "stale": not 0 <= age <= 60,
                 "exit_node_ip": data.get("exit_node_ip"),
                 "client_running": data.get("client_running") is True,
