@@ -656,6 +656,30 @@ class DeliveryService:
             }
 
     @business_operation
+    async def refresh_inventory_only(self):
+        from .inventory_refresh import store
+        if self._listing_sync_lock.locked():
+            raise ValueError('INVENTORY_REFRESH_BUSY')
+        async with self._listing_sync_lock:
+            now = time.monotonic()
+            if now - getattr(self, '_inventory_refresh_attempt', -1000) < 60:
+                raise ValueError('INVENTORY_REFRESH_COOLDOWN')
+            account_id, cookies, seller = self._account_id, self._runtime_cookie_map, self._runtime_seller_id
+            if self._status != 'listening' or not account_id or not cookies or not seller:
+                raise ValueError('INVENTORY_SESSION_NOT_READY')
+            self.runtime_policy.require_account(account_id)
+            self._inventory_refresh_attempt = now
+            websocket = self._runtime_websocket
+            report = await self._fetch_live_inventory(cookies, seller, strict_observation=True)
+            self.runtime_policy.require_account(account_id)
+            self.runtime_policy.require_egress()
+            if self._account_id != account_id or self._runtime_websocket is not websocket or self._status != 'listening':
+                raise ValueError('INVENTORY_SESSION_CHANGED')
+            with self.database.connect() as connection:
+                connection.execute('BEGIN IMMEDIATE')
+                return store(connection, account_id, report)
+
+    @business_operation
     async def approved_order(self, account_id, order_id, *, library, execute=False):
         """Explicit single-order action; preview never claims, sends or creates chats."""
         from .approved_order import require_fresh_order, require_current_package
@@ -2453,12 +2477,17 @@ class DeliveryService:
         seller_id: str,
         *,
         max_pages: int = 5,
+        strict_observation: bool = False,
     ) -> list[dict[str, object]]:
         """Fetch a bounded seller inventory using the API used by the PC profile page."""
+        from .inventory_refresh import InventoryObservation
+        observation = InventoryObservation() if strict_observation else None
         raw_items: list[dict[str, object]] = []
         next_page_model: object | None = None
         next_page_num: object | None = None
         for page_number in range(1, max(1, min(max_pages, 5)) + 1):
+            if observation and page_number > 1:
+                await asyncio.sleep(2)
             token_seed = cookie_map.get("_m_h5_tk", "").split("_", 1)[0]
             if not token_seed:
                 raise RuntimeError("登录 Cookie 缺少商品查询令牌")
@@ -2503,10 +2532,19 @@ class DeliveryService:
                 cookie_map=cookie_map,
             )
             ret = payload.get("ret", []) if isinstance(payload, dict) else []
+            if observation and (not isinstance(ret, list) or not any(str(r).startswith('SUCCESS::') for r in ret)):
+                raise ValueError('INVENTORY_PLATFORM_RESPONSE_REJECTED')
             if not any("SUCCESS" in str(item) for item in ret):
                 error = str(ret[0]) if ret else "未知平台响应"
                 raise RuntimeError(f"读取闲鱼在售商品失败：{error[:200]}")
             response_data = payload.get("data", {})
+            if observation:
+                observation.consume(response_data, page_number)
+                if observation.complete:
+                    break
+                next_page_model = response_data.get('nextPageModel')
+                next_page_num = response_data.get('nextPageNum')
+                continue
             if not isinstance(response_data, dict):
                 break
             cards = response_data.get("cardList", [])
@@ -2516,7 +2554,7 @@ class DeliveryService:
                 break
             next_page_model = response_data.get("nextPageModel")
             next_page_num = response_data.get("nextPageNum")
-        return raw_items
+        return observation.result() if observation else raw_items
 
     @business_operation
     async def _fetch_recent_sold_orders(

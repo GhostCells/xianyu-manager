@@ -42,7 +42,7 @@ function badges(product) {
   result.push(knowledgeBadge);
   if (Array.isArray(product.delivery_issues) && !product.delivery_issues.length) result.push('<span class="badge ok">交付资料已人工核验</span>');
   else result.push('<span class="badge warn">交付资料待复核（非在线失效判定）</span>');
-  if (product.listing_status === "published") result.push('<span class="badge blue">已上架</span>');
+  if (product.listing_status === "published") result.push('<span class="badge blue">登记已发布（非实时状态）</span>');
   else if (product.listing_status === "paused") result.push('<span class="badge neutral">已暂停</span>');
   else result.push('<span class="badge neutral">待上架</span>');
   return result.join("");
@@ -77,7 +77,7 @@ function renderLiveListings(listings) {
   return listings.map((listing) => {
     const product = state.products.find((item) => item.dir_name === listing.matched_product_dir_name);
     const mapped = Boolean(listing.matched_product_dir_name);
-    const sourceLabel = listing.source_kind === "configured" ? "已发布" : "在售";
+    const sourceLabel = listing.source_kind === "platform_inventory" ? "上次刷新正常在售" : "历史登记·待刷新";
     const mappingBadge = product
       ? `<span class="badge ok">已映射 ${String(product.number).padStart(2, "0")}</span>`
       : mapped
@@ -592,7 +592,43 @@ async function loadProducts() {
   renderAutoReplyTestProducts();
   el("accountName").textContent = state.account?.name || (state.prepareMode ? "准备环境：账号 ID 待核对" : state.safeMode ? "安全演练：未选定账号" : "七月账号");
   render();
+  await loadInventoryRefreshStatus();
 }
+
+async function loadInventoryRefreshStatus() {
+  try {
+    const response = await fetch('/api/listings/refresh-status');
+    if (!response.ok) throw new Error('状态不可用');
+    const result = await response.json();
+    const special = (result.items || []).filter(item => item.item_status !== 0);
+    el('inventoryRefreshStatus').textContent = result.last_success_at
+      ? `最后成功刷新：${new Date(result.last_success_at).toLocaleString()} · 原始${result.raw_count}张 · 正常${result.normal_count}件 · 特殊${result.special_count}件。${special.map(item => `${item.title}（${item.item_id}，状态${item.item_status}）`).join('；')} 未出现的历史商品仍保留，不代表已确认下架。`
+      : '平台在售状态待刷新；旧记录不代表实时在售。';
+    if (result.needs_refresh && result.last_error) el('inventoryRefreshStatus').textContent = `状态待刷新（${result.last_error}）；${el('inventoryRefreshStatus').textContent}`;
+  } catch (_) {
+    el('inventoryRefreshStatus').textContent = '平台刷新状态读取失败；当前列表可能过期。';
+  }
+}
+
+el('refreshInventoryButton').addEventListener('click', async () => {
+  const button = el('refreshInventoryButton');
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = '正在读取平台列表…';
+  try {
+    const response = await fetch('/api/listings/refresh', {method:'POST'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || '刷新失败');
+    await loadProducts();
+    showActionNotice(`列表刷新成功：正常${result.normal_count}件，特殊${result.special_count}件；未扫描资料或更改商品配置。`);
+  } catch (error) {
+    showActionNotice(`刷新未完成，保留原列表：${error.message}`, true);
+    el('inventoryRefreshStatus').textContent = `状态待刷新：${error.message}。原列表未被本次失败读取覆盖。`;
+  } finally {
+    button.disabled = false;
+    button.textContent = '刷新在售列表';
+  }
+});
 
 function centsToInput(value) { return value == null ? "" : (value / 100).toFixed(2); }
 function inputToCents(value) { return value === "" ? null : Math.round(Number(value) * 100); }

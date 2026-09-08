@@ -16,10 +16,12 @@
       <div class="header-actions">
         <div class="account-chip"><span></span><div><small>唯一账号</small><strong id="accountName">七月账号</strong></div></div>
         <button id="scanButton" class="secondary">同步本地与闲鱼</button>
+        <button id="refreshInventoryButton" class="secondary" type="button">刷新在售列表</button>
       </div>
     </header>
 
     <main>
+      <p id="inventoryRefreshStatus" role="status">平台在售状态待刷新；旧记录不代表实时在售。</p>
       <section class="dashboard-grid">
         <section id="sessionPanel" class="status-panel" aria-live="polite">
           <div class="status-heading"><span id="sessionDot" class="status-dot"></span><div><small>账号连接</small><h2 id="sessionTitle">正在读取…</h2></div></div>

@@ -880,7 +880,32 @@ def orders() -> list[dict[str, object]]:
 
 @app.get("/api/listings")
 def listings() -> list[dict[str, object]]:
-    return database.list_live_listings()
+    return database.list_live_listings(runtime_policy.account_id) if runtime_policy.managed else database.list_live_listings()
+
+
+@app.get('/api/listings/refresh-status')
+def inventory_refresh_status():
+    from .inventory_refresh import status
+    account_id = runtime_policy.account_id if runtime_policy.managed else int(database.get_active_account()['id'])
+    with database.connect() as connection:
+        return status(connection, account_id)
+
+
+@app.post('/api/listings/refresh')
+async def inventory_refresh_only():
+    try:
+        return await delivery_service.refresh_inventory_only()
+    except (RuntimeError, ValueError) as exc:
+        code = str(exc)
+        if not code.startswith('INVENTORY_') or not code.replace('_', '').isalnum():
+            code = 'INVENTORY_REFRESH_FAILED_KEEP_PREVIOUS'
+        if code not in {'INVENTORY_REFRESH_BUSY', 'INVENTORY_REFRESH_COOLDOWN'}:
+            from .inventory_refresh import mark_failed
+            account_id = runtime_policy.account_id if runtime_policy.managed else int(database.get_active_account()['id'])
+            if account_id is not None:
+                with database.connect() as connection:
+                    mark_failed(connection, account_id, code)
+        raise HTTPException(status_code=409, detail=code) from None
 
 
 @app.put("/api/listings/{item_id}/delivery")
