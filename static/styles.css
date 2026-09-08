@@ -26,10 +26,10 @@ h1, h2, h3, p { margin-top: 0; }
 
 .topbar {
   display: flex; align-items: flex-end; justify-content: space-between; gap: 28px;
-  padding: 38px clamp(20px, 5vw, 76px) 30px; background: rgba(255,255,255,.9);
+  padding: 20px clamp(20px, 5vw, 76px); background: rgba(255,255,255,.9);
   border-bottom: 1px solid var(--line); backdrop-filter: blur(14px);
 }
-h1 { margin-bottom: 9px; font-size: clamp(30px, 4vw, 46px); letter-spacing: -.045em; }
+h1 { margin-bottom: 0; font-size: clamp(24px, 3vw, 30px); letter-spacing: -.045em; }
 h2 { margin-bottom: 0; }
 .eyebrow { color: var(--green); font-size: 11px; font-weight: 900; letter-spacing: .16em; margin-bottom: 7px; }
 .subtitle { color: var(--muted); margin-bottom: 0; }
@@ -44,7 +44,16 @@ main { padding: 28px clamp(20px, 5vw, 76px) 64px; }
 .status-panel, .auto-reply-panel, .safety-panel, .workspace, .orders-panel, .metric {
   border: 1px solid var(--line); background: var(--white); box-shadow: 0 10px 30px rgba(25,45,37,.045);
 }
-.status-panel { min-height: 252px; padding: 22px; border-radius: 20px; }
+.status-panel { padding: 18px; border-radius: 16px; }
+.compact-settings { margin-top: 12px; }
+.compact-settings > summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; padding: 6px 0; }
+.compact-settings > summary:hover { color: var(--green); }
+.compact-settings > summary:focus-visible { outline: 2px solid var(--green); outline-offset: 4px; border-radius: 3px; }
+.compact-settings[open] > summary { margin-bottom: 12px; }
+.compact-settings > .switch-line { width: fit-content; margin-bottom: 12px; }
+.dashboard-grid > .auto-reply-panel, .dashboard-grid > .safety-panel { margin-top: 0; padding: 18px; border-radius: 16px; min-width: 0; }
+.dashboard-grid .status-meta:empty { display: none; }
+.dashboard-grid > :has(.compact-settings[open]) { grid-column: 1 / -1; }
 .status-heading { display: flex; align-items: center; gap: 13px; }
 .status-heading small { color: var(--muted); font-size: 11px; }
 .status-heading h2 { margin-top: 3px; font-size: 20px; }

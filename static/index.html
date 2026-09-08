@@ -4,18 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>七月账号商品与发货</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260806-visible-chrome" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260908-compact" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <p class="eyebrow">WINDOWS 本地版 · 单账号</p>
-        <h1>七月账号商品与发货</h1>
-        <p class="subtitle">只管理一个闲鱼账号；商品文件、网盘地址和订单映射均保存在本机。</p>
+        <h1>商品与运营</h1>
       </div>
       <div class="header-actions">
-        <div class="account-chip"><span></span><div><small>唯一账号</small><strong id="accountName">七月账号</strong></div></div>
-        <button id="scanButton" class="secondary">同步本地与闲鱼</button>
+        <div class="account-chip"><div><small>管理账号</small><strong id="accountName">七月账号</strong></div></div>
         <button id="refreshInventoryButton" class="secondary" type="button">刷新在售列表</button>
       </div>
     </header>
@@ -27,18 +24,22 @@
           <div class="status-heading"><span id="sessionDot" class="status-dot"></span><div><small>账号连接</small><h2 id="sessionTitle">正在读取…</h2></div></div>
           <p id="sessionMessage">登录信息只保存在本机专用浏览器目录。</p>
           <p id="sessionMeta" class="status-meta"></p>
+          <details class="compact-settings"><summary>登录与会话维护</summary>
           <div class="panel-actions">
             <button id="startBinding" class="primary" type="button">登录七月账号</button>
             <button id="confirmBinding" class="primary" type="button" hidden>绑定并保持窗口</button>
             <button id="syncBinding" class="secondary" type="button" hidden>同步当前会话</button>
             <button id="cancelBinding" class="secondary" type="button" hidden>取消</button>
+            <button id="scanButton" class="secondary" type="button">同步本地与闲鱼</button>
           </div>
+          </details>
         </section>
 
         <section id="deliveryPanel" class="status-panel" aria-live="polite" data-status="disabled">
           <div class="status-heading"><span class="delivery-dot status-dot"></span><div><small>订单监听</small><h2 id="deliveryTitle">正在读取…</h2></div></div>
           <p id="deliveryMessage">只处理明确的已付款订单，不回复普通聊天。</p>
           <p id="deliveryMeta" class="status-meta"></p>
+          <details class="compact-settings"><summary>监听与发货设置</summary>
           <div class="delivery-options">
             <label class="check"><input id="autoConfirmPlatform" type="checkbox" checked /> 发送后确认平台发货</label>
             <label class="check"><input id="autoFreeGroup" type="checkbox" checked /> 待刀成时自动免拼</label>
@@ -48,16 +49,16 @@
             <button id="startDelivery" class="primary" type="button">开启自动发货</button>
             <button id="stopDelivery" class="secondary" type="button" hidden>停止监听</button>
           </div>
+          </details>
         </section>
-      </section>
-
       <section id="autoReplyPanel" class="auto-reply-panel" data-status="disabled" aria-live="polite">
         <div class="auto-reply-heading">
           <div class="status-heading"><span class="auto-reply-dot status-dot"></span><div><small>AI 售前客服</small><h2 id="autoReplyTitle">正在读取…</h2></div></div>
-          <label class="switch-line"><input id="autoReplyEnabled" type="checkbox" /> 启用自动回复</label>
         </div>
         <p id="autoReplyMessage">仅处理已映射商品的买家普通文本；系统卡片和高风险问题不会自动回复。</p>
         <p id="autoReplyMeta" class="status-meta"></p>
+        <details class="compact-settings"><summary>自动回复设置与记录</summary>
+        <label class="switch-line"><input id="autoReplyEnabled" type="checkbox" /> 启用自动回复</label>
         <p class="privacy-notice">隐私提示：启用后，买家文本和从《发布文案》读取、脱敏后的对应商品资料会通过硅基流动发送给 DeepSeek；网盘地址、提取码、Cookie 和密钥不会进入模型。问题含糊时会先追问一句，资料仍不足时只跳过当前问题，不会锁定后续消息；对话记录保存在本机 SQLite。</p>
 
         <form id="autoReplyForm" class="auto-reply-form">
@@ -94,6 +95,7 @@
 
         <div class="reply-records-heading"><h3>最近自动回复记录</h3><span>高风险、失败和人工接管都会保留原因</span></div>
         <div id="autoReplyRecords" class="reply-records"><p class="empty">暂无回复记录。</p></div>
+        </details>
       </section>
 
       <section id="safetyPanel" class="safety-panel" data-status="normal" aria-live="polite">
@@ -103,6 +105,7 @@
         </div>
         <p id="safetyMessage">限制自动发送频率；平台异常时先暂停，避免连续重试。</p>
         <p id="safetyMeta" class="status-meta"></p>
+        <details class="compact-settings"><summary>限流设置与启动诊断</summary>
         <p id="startupReport" class="privacy-notice">正在读取最近一次启动检查。</p>
         <form id="safetyForm" class="safety-form">
           <div class="safety-fields">
@@ -116,6 +119,9 @@
           <div class="panel-actions"><button class="primary" type="submit">保存安全设置</button></div>
           <p id="safetyNotice" class="action-notice" role="status" hidden></p>
         </form>
+        </details>
+      </section>
+
       </section>
 
       <section id="summary" class="summary" aria-label="商品概览"></section>
