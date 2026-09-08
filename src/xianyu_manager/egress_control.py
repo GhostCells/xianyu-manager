@@ -423,8 +423,27 @@ def failure_diagnostic(exc, stage):
         code = getattr(exc, 'returncode', None)
     transient = stage == 'observe' and command == 'curl' and (
         isinstance(exc, subprocess.TimeoutExpired) or code in {5,6,7,28,35,52,55,56})
-    return {'stage': stage, 'exception_type': type(exc).__name__,
-            'command': command, 'exit_code': code, 'transient': transient}
+    diagnostic = {'stage': stage, 'exception_type': type(exc).__name__,
+                  'command': command, 'exit_code': code, 'transient': transient}
+    if isinstance(exc, OSError):
+        # Paths may contain private data: emit only fixed, recognised classes.
+        path = str(getattr(exc, 'filename', '') or '')
+        category = 'unclassified'
+        if re.fullmatch(r'/proc/[0-9]+(?:/ns/net|/net/dev)?', path):
+            category = 'runtime_process'
+        elif path == '/run/netns/' + NAMESPACE:
+            category = 'business_namespace'
+        elif path == '/proc/sys/net/ipv4/ip_forward':
+            category = 'ipv4_forward_parameter'
+        elif path.startswith('/sys/fs/cgroup/') and path.endswith('/cgroup.procs'):
+            category = 'cgroup_membership'
+        diagnostic.update(file_category=category, errno=exc.errno)
+        tb = exc.__traceback__
+        while tb is not None:
+            if tb.tb_frame.f_code.co_filename == __file__:
+                diagnostic['source_line'] = tb.tb_lineno
+            tb = tb.tb_next
+    return diagnostic
 
 
 def main():
