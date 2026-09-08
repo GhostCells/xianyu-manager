@@ -51,7 +51,18 @@ def test_api_authority_boundaries(client,mode):
     assert r.status_code in {403,409}
 
 
-def test_manifest_body_limit(client):
+def test_manifest_body_limit(client,monkeypatch):
+    from xianyu_manager import app as api
+    assert api.MAX_MANIFEST_BYTES==32*1024**2
+    monkeypatch.setattr(api,'MAX_MANIFEST_BYTES',1024)
     c,_=client
-    r=c.post('/api/product-imports',headers={'X-Product-Import':'confirm-local'},content=b' '* (512*1024+1))
+    r=c.post('/api/product-imports',headers={'X-Product-Import':'confirm-local'},content=b' '*1025)
     assert r.status_code==413
+
+
+def test_twenty_thousand_paths_pass_old_body_limit(client):
+    c,_=client
+    files=[{'path':f'45-demo/商品资料/文件{i}.txt','size':0} for i in range(20000)]
+    r=c.post('/api/product-imports',headers={'X-Product-Import':'confirm-local'},json={'item_id':'123456789','product_dir':'45-demo','files':files})
+    assert r.status_code==200,r.text
+    assert r.json()['file_count']==20000

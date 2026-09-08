@@ -19,10 +19,12 @@ from .fulfillment_rules import parse_listing_id
 from .knowledge import load_knowledge_folder, TEXT_EXTENSIONS
 from .scanner import load_validator, scan_product, sha256_file
 
-MAX_FILES = 1000
-MAX_FILE = 256 * 1024**2
-MAX_TOTAL = 512 * 1024**2
-MAX_STORAGE = 2 * 1024**3
+MAX_FILES = 20000
+MAX_TOTAL = 1024**3
+MAX_FILE = MAX_TOTAL
+# Enough room for a full-size intake plus its private candidate; still bounded.
+MAX_STORAGE = 4 * 1024**3
+MAX_MANIFEST_BYTES = 32 * 1024**2
 TTL = 24 * 3600
 
 
@@ -109,7 +111,7 @@ class ProductImport:
             raise ValueError('请提供完整商品ID和“编号-商品名”目录名称')
         safe_path(name)
         if not 1 <= len(files) <= MAX_FILES:
-            raise ValueError('单次最多1000个文件')
+            raise ValueError('单次最多20000个文件')
         seen, total, normalized = set(), 0, []
         folder = None
         for f in files:
@@ -122,11 +124,11 @@ class ProductImport:
             seen.add(str(path).casefold())
             size = f['size']
             if type(size) is not int or not 0 <= size <= MAX_FILE:
-                raise ValueError('单文件最大256MB')
+                raise ValueError('单文件最大1GiB（1024MiB）')
             total += size
             normalized.append({'path': str(PurePosixPath(*path.parts[1:])), 'size': size})
         if total > MAX_TOTAL:
-            raise ValueError('单次商品包最大512MB')
+            raise ValueError('单次商品包最大1GiB（1024MiB）')
         with self.lock:
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
             for record in self.root.glob('*/job.json'):

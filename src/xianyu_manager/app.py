@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 from starlette.concurrency import run_in_threadpool
-from .product_import import ProductImport
+from .product_import import ProductImport, MAX_MANIFEST_BYTES
 
 from .auto_reply import (
     DEFAULT_BASE_URL,
@@ -978,7 +978,7 @@ async def _import_json(request):
     data = bytearray()
     async for chunk in request.stream():
         data.extend(chunk)
-        if len(data) > 512 * 1024:
+        if len(data) > MAX_MANIFEST_BYTES:
             raise HTTPException(status_code=413, detail='导入清单过大')
     try:
         result = json.loads(data)

@@ -231,7 +231,7 @@
         <p>原包保存在服务器私有归档，不自动发给买家。仅“商品资料”用于知识，“客户交付”中的指定ZIP用于交付。请勿上传密码、账号凭据或无关私人文件。</p>
         <label>本地Product目录（已有映射保持不变）<input id="importProductDir" maxlength="120" placeholder="45-商品名称" required /></label>
         <label>选择整个商品文件夹<input id="importFolder" type="file" webkitdirectory multiple /></label>
-        <p id="importFilesSummary">最多1000个文件、单文件256MB、整包512MB；隐藏文件不上传。</p>
+        <p id="importFilesSummary">最多20,000个文件，整包不超过1GiB（1024MiB）；隐藏文件不上传。</p>
         <button id="uploadProductFolder" type="submit" class="primary">上传并生成预览</button>
         <p id="importProgress" role="status" aria-live="polite"></p>
         <section id="importPreview" hidden>
@@ -248,6 +248,6 @@
       </form>
     </dialog>
     <script src="/static/app.js?v=20260908-knowledge-summary" defer></script>
-    <script src="/static/product-import.js?v=20260908-product-import" defer></script>
+    <script src="/static/product-import.js?v=20260908-import-20k" defer></script>
   </body>
 </html>

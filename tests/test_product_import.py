@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 from xianyu_manager.database import Database
-from xianyu_manager.product_import import ProductImport, safe_path, MAX_FILE
+from xianyu_manager.product_import import ProductImport, safe_path, MAX_FILE, MAX_TOTAL, MAX_FILES
 
 
 def zipped(name='customer/readme.txt'):
@@ -115,6 +115,36 @@ def test_paths_rejected(path):
 def test_manifest_rejected(intake,files):
     imp,a=intake
     with pytest.raises(ValueError):imp.start(a,'123456789','45-demo',files)
+
+
+@pytest.mark.parametrize('count', [20000, 20001])
+def test_file_count_boundary(intake,count):
+    imp,a=intake
+    files=[{'path':f'45-demo/资料/{i}.txt','size':0} for i in range(count)]
+    if count == MAX_FILES:
+        assert imp.start(a,'123456789','45-demo',files)['file_count']==count
+    else:
+        with pytest.raises(ValueError,match='20000'):imp.start(a,'123456789','45-demo',files)
+
+
+@pytest.mark.parametrize('extra', [0, 1])
+def test_total_gib_boundary_without_large_files(intake,monkeypatch,extra):
+    import xianyu_manager.product_import as module
+    monkeypatch.setattr(module.shutil,'disk_usage',lambda _:SimpleNamespace(free=10*1024**3))
+    imp,a=intake
+    files=[{'path':'45-demo/客户交付/a.zip','size':MAX_TOTAL}, {'path':'45-demo/说明.txt','size':extra}]
+    if extra:
+        with pytest.raises(ValueError,match='1GiB'):imp.start(a,'123456789','45-demo',files)
+    else:
+        assert imp.start(a,'123456789','45-demo',files)['bytes']==1024**3
+
+
+def test_large_import_still_requires_free_disk(intake,monkeypatch):
+    import xianyu_manager.product_import as module
+    monkeypatch.setattr(module.shutil,'disk_usage',lambda _:SimpleNamespace(free=3*1024**3))
+    imp,a=intake
+    with pytest.raises(ValueError,match='存储空间不足'):
+        imp.start(a,'123456789','45-demo',[{'path':'45-demo/a','size':MAX_TOTAL}])
 
 
 def test_multiple_zip_requires_choice(intake):

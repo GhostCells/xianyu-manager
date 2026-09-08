@@ -3,6 +3,11 @@
   const node = id => document.getElementById(id);
   let listing, files = [], token = null, preview = null, busy = false, committed = false;
   const headers = {'X-Product-Import': 'confirm-local'};
+  function importFilesAllowed(files) {
+    return files.length > 0 && files.length <= 20000
+      && files.every(f => Number.isSafeInteger(f.size) && f.size >= 0 && f.size <= 1024**3)
+      && files.reduce((n,f) => n+f.size, 0) <= 1024**3;
+  }
   async function request(path, method, body, raw = false) {
     const response = await fetch('/api/product-imports' + path, {
       method, headers: {...headers, ...(raw ? {} : {'Content-Type':'application/json'})},
@@ -51,7 +56,7 @@
     node('productImportForm').reset();
     node('importProductDir').value = listing.matched_product_dir_name || '';
     node('importIdentity').textContent = `闲鱼商品：${listing.title} · ${listing.item_id}`;
-    node('importFilesSummary').textContent = '最多1000个文件、单文件256MB、整包512MB；隐藏文件不上传。';
+    node('importFilesSummary').textContent = '最多20,000个文件，整包不超过1GiB（1024MiB）；隐藏文件不上传。';
     node('importError').textContent = node('importProgress').textContent = '';
     node('importPreview').hidden = true;
     node('leaveProductImport').hidden = true;
@@ -67,7 +72,7 @@
     event.preventDefault();
     work(async () => {
       if (token) throw new Error('本次已上传，请预览或取消后重试');
-      if (!files.length || files.length > 1000 || files.some(f=>f.size>256*1024**2) || files.reduce((n,f)=>n+f.size,0)>512*1024**2) throw new Error('请检查文件数量和大小限制');
+      if (!importFilesAllowed(files)) throw new Error('最多20,000个文件，整包不超过1GiB（1024MiB）');
       const job = await request('', 'POST', {item_id:listing.item_id,product_dir:node('importProductDir').value.trim(),files:files.map(f=>({path:f.webkitRelativePath,size:f.size}))});
       token = job.import_id;
       for (let i=0;i<files.length;i++) {
