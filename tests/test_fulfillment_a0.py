@@ -454,7 +454,7 @@ const context={el,state:{},Object,JSON,encodeURIComponent,
  loadProducts:async()=>{},openEdit:()=>{},showActionNotice:()=>{},
  fetch:async(url,options)=>{requests.push({url,...options});return {ok:true}}};
 vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('function readEditFields()'),source.indexOf('async function copyListing(')),context);
+vm.runInContext(source.slice(source.indexOf('function shareErrorMessage('),source.indexOf('async function copyListing(')),context);
 (async()=>{
  context.state.editBaseline=context.readEditFields();
  el('suggestedPrice').value='2';

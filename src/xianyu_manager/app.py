@@ -13,6 +13,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, model_validator
+from starlette.concurrency import run_in_threadpool
+from .product_import import ProductImport
 
 from .auto_reply import (
     DEFAULT_BASE_URL,
@@ -141,6 +143,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="闲鱼本地管理系统", version="0.5.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=settings.static_dir), name="static")
+product_imports = ProductImport(database, settings)
 
 
 @app.exception_handler(RuntimeOperationBlocked)
@@ -954,6 +957,83 @@ def activate_account(account_id: int) -> dict[str, object]:
 @app.get("/api/products")
 def products() -> list[dict[str, object]]:
     return database.list_products(runtime_policy.account_id, allow_no_account=runtime_policy.safe_mode or runtime_policy.prepare_mode)
+
+
+def _import_account(request):
+    if request.headers.get('X-Product-Import') != 'confirm-local':
+        raise HTTPException(status_code=403, detail='商品导入需要本地管理操作确认')
+    if runtime_policy.mode != 'normal':
+        raise HTTPException(status_code=403, detail='当前模式不允许商品包导入')
+    account = database.get_active_account()
+    if not account:
+        raise HTTPException(status_code=409, detail='尚未选择运行账号')
+    account_id = runtime_policy.account_id if runtime_policy.managed else int(account['id'])
+    if not account or account['id'] != account_id:
+        raise HTTPException(status_code=409, detail='运行账号不匹配')
+    return account_id
+
+
+async def _import_json(request):
+    import json
+    data = bytearray()
+    async for chunk in request.stream():
+        data.extend(chunk)
+        if len(data) > 512 * 1024:
+            raise HTTPException(status_code=413, detail='导入清单过大')
+    try:
+        result = json.loads(data)
+        if not isinstance(result, dict):
+            raise ValueError()
+        return result
+    except ValueError:
+        raise HTTPException(status_code=422, detail='导入参数格式错误') from None
+
+
+async def _import_call(fn, *args):
+    try:
+        return await run_in_threadpool(fn, *args)
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        # File-system paths / uploaded contents must not leak through exceptions.
+        message = str(exc) if isinstance(exc, ValueError) else '导入参数或文件状态不正确，请检查后重试'
+        raise HTTPException(status_code=409, detail=message) from None
+
+
+@app.post('/api/product-imports')
+async def start_product_import(request: Request):
+    account_id = _import_account(request)
+    body = await _import_json(request)
+    if not isinstance(body.get('files'), list):
+        raise HTTPException(status_code=422, detail='缺少文件清单')
+    return await _import_call(product_imports.start, account_id, body.get('item_id', ''), body.get('product_dir', ''), body['files'])
+
+
+@app.put('/api/product-imports/{token}/files/{index}')
+async def upload_product_file(token: str, index: int, request: Request):
+    account_id = _import_account(request)
+    try:
+        async with asyncio.timeout(120):
+            return await product_imports.upload(account_id, token, index, request.stream())
+    except (ValueError, OSError, TimeoutError):
+        raise HTTPException(status_code=409, detail='文件上传失败或不完整；原商品未改变，请取消导入后重试') from None
+
+
+@app.post('/api/product-imports/{token}/preview')
+async def preview_product_import(token: str, request: Request):
+    account_id = _import_account(request)
+    body = await _import_json(request)
+    return await _import_call(product_imports.preview, account_id, token, body.get('zip_index'))
+
+
+@app.post('/api/product-imports/{token}/confirm')
+async def confirm_product_import(token: str, request: Request):
+    account_id = _import_account(request)
+    body = await _import_json(request)
+    return await _import_call(product_imports.confirm, account_id, token, body.get('preview_id'), body.get('accept_replace_and_unverify'))
+
+
+@app.delete('/api/product-imports/{token}')
+async def cancel_product_import(token: str, request: Request):
+    return await _import_call(product_imports.cancel, _import_account(request), token)
 
 
 @app.post("/api/scan")

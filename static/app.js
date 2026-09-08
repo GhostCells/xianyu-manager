@@ -119,6 +119,7 @@ function renderLiveListings(listings) {
       <div class="row-actions">
         <a class="secondary link-button" href="${escapeHtml(listing.listing_url)}" target="_blank" rel="noreferrer">打开闲鱼</a>
         ${product ? `<button class="primary edit-button" data-dir="${escapeHtml(product.dir_name)}">配置交付</button>` : ""}
+        <button class="secondary import-product-button" type="button" data-item-id="${escapeHtml(listing.item_id)}">导入商品包</button>
         ${mappingControls}
       </div>
     </article>`;
@@ -669,6 +670,7 @@ function openEdit(dirName) {
   renderShareVerification(product);
   renderKnowledgeEditor(product);
   el("formError").textContent = "";
+  el('editNotice').textContent = '';
   if (!el("editDialog").open) el("editDialog").showModal();
 }
 
@@ -680,7 +682,7 @@ function renderShareVerification(product, changed = false) {
   status.style.color = verified ? '#167342' : '#8a5100';
   status.textContent = changed ? '⚠ 交付资料已变化，需要重新核验（先保存）' : verified
     ? `✓ 当前交付版本已人工核验 · 时间：${product.share_verified_at || '未记录'} · 核验摘要：${product.verified_fingerprint.slice(0,12)} · ZIP：${(product.zip_hash || '').slice(0,12)}`
-    : `⚠ 当前交付版本待人工核验 · ${(product.delivery_issues || ['VERIFICATION_VERSION_UNCONFIRMED']).join(', ')} · ZIP：${(product.zip_hash || '').slice(0,12)}`;
+    : `⚠ 当前交付版本待人工核验 · ${shareErrorMessage((product.delivery_issues || ['VERIFICATION_VERSION_UNCONFIRMED']).join(','))} · ZIP：${(product.zip_hash || '').slice(0,12) || '未登记'}`;
   el('confirmShare').disabled = Boolean(state.shareConfirmPending || verified || changed);
   el('confirmShare').textContent = verified ? '当前版本已核验' : '我已人工核验当前交付资料';
 }
@@ -722,6 +724,18 @@ async function updateKnowledgeFolder(mode, button) {
   }
 }
 
+function shareErrorMessage(detail) {
+  const messages = {
+    DELIVERY_PACKAGE_UNCONFIRMED: '交付包尚未确认，请先补齐当前交付 ZIP 和版本记录；仅保存链接不能完成核验',
+    QUALITY_BLOCKED: '商品质量检查尚未通过，需先处理交付资料问题',
+    SHARE_UNVERIFIED: '分享资料尚未人工核验',
+    SHARE_NEEDS_REVIEW: '分享资料需要重新核对',
+    VERIFICATION_VERSION_UNCONFIRMED: '当前交付版本尚未人工核验',
+  };
+  if (typeof detail !== 'string') return '操作未完成，请检查填写内容或稍后重试';
+  return detail.split(',').map(code => messages[code.trim()] || code.trim()).join('；');
+}
+
 function readEditFields() {
   return {enabled_for_account:el("enabledForAccount").checked, share_url:el("shareUrl").value || null, share_code:el("shareCode").value.trim(), suggested_price_cents:inputToCents(el("suggestedPrice").value), confirmed_price_cents:inputToCents(el("confirmedPrice").value), listing_url:el("listingUrl").value || null, listing_status:el("listingStatus").value};
 }
@@ -731,8 +745,10 @@ function editedFields() {
 }
 
 async function confirmShare(revoke = false) {
-  if (state.shareConfirmPending) return;
-  if (Object.keys(editedFields()).length) { el("formError").textContent = "请先保存修改并重新打开，再核验当前资料"; return; }
+  if (state.shareConfirmPending || state.editSavePending) return;
+  if (Object.keys(editedFields()).length) { el("formError").textContent = "请先点击保存配置，保存后可在本窗口继续人工核验"; return; }
+  el('formError').textContent = '';
+  el('editNotice').textContent = '';
   const dirName = el("editDirName").value;
   state.shareConfirmPending = true;
   el('confirmShare').disabled = el('revokeShare').disabled = true;
@@ -746,10 +762,9 @@ async function confirmShare(revoke = false) {
   if (!response.ok) { const result = await response.json(); throw new Error(result.detail || '核验未完成'); }
   await loadProducts();
   openEdit(dirName);
-  showActionNotice(revoke ? '已撤销当前交付资料核验' : '当前交付资料核验成功');
+  el('editNotice').textContent = revoke ? '已撤销当前交付资料核验' : '当前交付资料核验成功';
   } catch (error) {
-    el('formError').textContent = error.message || '核验失败，请检查连接';
-    showActionNotice(el('formError').textContent, true);
+    el('formError').textContent = shareErrorMessage(error.message || '核验失败，请检查连接');
   } finally {
     state.shareConfirmPending = false;
     el('revokeShare').disabled = false;
@@ -762,12 +777,35 @@ async function confirmShare(revoke = false) {
 
 async function saveEdit(event) {
   event.preventDefault();
+  if (state.editSavePending || state.shareConfirmPending) return;
   const dirName = el("editDirName").value;
   const payload = editedFields();
-  const response = await fetch(`/api/products/${encodeURIComponent(dirName)}`, {method:"PATCH", headers:{"Content-Type":"application/json", "X-Preparation-Action":"confirm-local"}, body:JSON.stringify(payload)});
-  if (!response.ok) { const error = await response.json().catch(() => ({})); el("formError").textContent = error.detail || "保存失败"; return; }
-  el("editDialog").close();
-  await loadProducts();
+  state.editSavePending = true;
+  const controls = ['saveEditButton','confirmShare','revokeShare','shareUrl','shareCode','enabledForAccount','suggestedPrice','confirmedPrice','listingUrl','listingStatus'];
+  const disabled = controls.map(id => [id, el(id).disabled]);
+  controls.forEach(id => { el(id).disabled = true; });
+  el('saveEditButton').textContent = '正在保存…';
+  el('formError').textContent = '';
+  el('editNotice').textContent = '';
+  let saved = false;
+  try {
+    const response = await fetch(`/api/products/${encodeURIComponent(dirName)}`, {method:"PATCH", headers:{"Content-Type":"application/json", "X-Preparation-Action":"confirm-local"}, body:JSON.stringify(payload)});
+    if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(shareErrorMessage(error.detail || '保存失败')); }
+    saved = true;
+    await loadProducts();
+    if (el('editDirName').value === dirName && el('editDialog').open) {
+      openEdit(dirName);
+      el('editNotice').textContent = '配置已保存，可在本窗口继续人工核验；保存本身不会核验或开放发货。';
+    }
+  } catch (error) {
+    el('formError').textContent = saved ? '保存已成功，但最新状态读取失败；请重新打开配置确认后再核验。' : shareErrorMessage(error.message || '保存失败，请检查连接');
+  } finally {
+    state.editSavePending = false;
+    disabled.forEach(([id, value]) => { el(id).disabled = value; });
+    el('saveEditButton').textContent = '保存配置';
+    if (state.products?.some(p => p.dir_name === dirName)) shareFieldsChanged();
+    if (saved && el('formError').textContent) el('confirmShare').disabled = true;
+  }
 }
 
 async function copyListing(dirName, button) {
