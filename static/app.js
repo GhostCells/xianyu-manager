@@ -638,13 +638,19 @@ function renderKnowledgeEditor(product) {
   el("knowledgeFolderPath").value = product.knowledge_source_path || "";
   const chars = Number(product.knowledge_chars || 0);
   const files = Number(product.knowledge_file_count || 0);
-  if (product.knowledge_source_path && chars > 0) {
-    el("knowledgeStatus").textContent = `已载入 ${files} 个文件 · ${chars.toLocaleString()} 字${product.knowledge_updated_at ? ` · ${product.knowledge_updated_at}` : ""}`;
-  } else if (chars > 0) {
-    el("knowledgeStatus").textContent = `已从商品资料自动提取 ${chars.toLocaleString()} 字；也可改用自选文件夹`;
-  } else {
-    el("knowledgeStatus").textContent = "商品资料缺失，请选择一个本地文件夹";
-  }
+  const text = typeof product.knowledge_text === 'string' ? product.knowledge_text : '';
+  const source = product.knowledge_source_path || '';
+  el('knowledgeAdvanced').open = false;
+  el('knowledgePreviewDetails').open = false;
+  el('knowledgeStatus').textContent = text.trim()
+    ? `已保存 ${chars.toLocaleString()} 字${files > 0 ? ` · ${files} 个来源文件` : ''}`
+    : '暂无知识，请在商品列表导入商品包；暂不能据此回答商品问题';
+  // A path is not proof of an import; describe the registered source only.
+  el('knowledgeSource').textContent = source
+    ? `来源：已登记资料目录（完整路径见高级设置）`
+    : text.trim() ? '来源：商品目录自动提取的知识' : '来源：尚未提取';
+  el('knowledgeUpdated').textContent = `更新时间：${product.knowledge_updated_at || '尚无独立更新时间记录'}`;
+  el('knowledgePreview').textContent = text.trim() ? text : '暂无可预览的知识。';
 }
 
 function openEdit(dirName) {
@@ -714,8 +720,8 @@ async function updateKnowledgeFolder(mode, button) {
     renderKnowledgeEditor(refreshedProduct);
     const skipped = Number(result.skipped_files || 0);
     showActionNotice(mode === "clear"
-      ? "已清除自选资料库，恢复使用商品目录自动提取的资料。"
-      : `资料库已更新：读取 ${result.file_count} 个文件、${Number(result.chars || 0).toLocaleString()} 字${skipped ? `，另跳过 ${skipped} 个文件` : ""}。`);
+      ? "已恢复使用商品目录自动提取的知识。"
+      : `知识已更新：读取 ${result.file_count} 个文件、${Number(result.chars || 0).toLocaleString()} 字${skipped ? `，另跳过 ${skipped} 个文件` : ""}。`);
   } catch (error) {
     el("formError").textContent = error.message;
   } finally {

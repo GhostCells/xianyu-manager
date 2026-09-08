@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>七月账号商品与发货</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260908-compact" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260908-knowledge-summary" />
   </head>
   <body>
     <header class="topbar">
@@ -188,18 +188,29 @@
         <button id="revokeShare" type="button">撤销分享核验</button>
         <section class="knowledge-editor" aria-labelledby="knowledgeEditorTitle">
           <div class="knowledge-editor-heading">
-            <div><strong id="knowledgeEditorTitle">自动回复资料库</strong><small id="knowledgeStatus">尚未载入资料</small></div>
-            <span class="knowledge-tag">与发货目录独立</span>
+            <div><strong id="knowledgeEditorTitle">自动回复知识</strong><small id="knowledgeStatus">尚未载入知识</small></div>
+            <span class="knowledge-tag">售前问答</span>
           </div>
-          <label>本地资料文件夹
-            <input id="knowledgeFolderPath" placeholder="可粘贴完整目录，或点击选择文件夹" />
-          </label>
-          <div class="knowledge-actions">
-            <button type="button" class="secondary" id="pickKnowledgeFolder">选择文件夹</button>
-            <button type="button" class="primary" id="loadKnowledgeFolder">载入/更新资料</button>
-            <button type="button" class="quiet-button" id="clearKnowledgeFolder">清除自选资料</button>
-          </div>
-          <p class="knowledge-hint">读取 TXT、Markdown、CSV、JSON、YAML、HTML 和 PDF；会递归扫描并移除链接、提取码、联系方式与密钥。自动回复开启时，整理后的资料会发送给当前大模型，请不要选择含账号密码或私人文件的目录。</p>
+          <p id="knowledgeSource" class="knowledge-hint"></p>
+          <p id="knowledgeUpdated" class="knowledge-hint"></p>
+          <p class="knowledge-hint">导入商品包后，“商品资料”会提取为此处的知识，无需再配置一份资料库。回复时按商品精确匹配并读取已保存知识，不直接读取交付ZIP。分享人工核验与售前问答独立。</p>
+          <details id="knowledgePreviewDetails">
+            <summary>查看当前商品知识（只读）</summary>
+            <pre id="knowledgePreview" class="knowledge-preview"></pre>
+          </details>
+          <details id="knowledgeAdvanced">
+            <summary>高级设置：手动指定知识目录</summary>
+            <p class="knowledge-hint">仅在需要单独维护知识时使用。这里填写的是运行服务器上的目录，不是Mac文件夹；本机商品包请使用商品列表的“导入商品包”。</p>
+            <label>服务器知识目录
+              <input id="knowledgeFolderPath" placeholder="运行服务器上已有资料的完整路径" />
+            </label>
+            <div class="knowledge-actions">
+              <button type="button" class="secondary" id="pickKnowledgeFolder">选择运行端文件夹</button>
+              <button type="button" class="primary" id="loadKnowledgeFolder">从目录更新知识</button>
+              <button type="button" class="quiet-button" id="clearKnowledgeFolder">恢复商品目录知识</button>
+            </div>
+            <p class="knowledge-hint">更新会替换当前知识。读取 TXT、Markdown、CSV、JSON、YAML、HTML 和 PDF，并按现有规则清理敏感信息；请勿选择含账号密码或私人文件的目录。仅展开此设置不会修改资料。</p>
+          </details>
         </section>
         <div class="two-columns">
           <label>建议价格（元）<input id="suggestedPrice" type="number" min="0" step="0.01" /></label>
@@ -236,7 +247,7 @@
         <button id="leaveProductImport" type="button" class="secondary" hidden>仅关闭，保留上传现场供检查</button>
       </form>
     </dialog>
-    <script src="/static/app.js?v=20260908-product-import" defer></script>
+    <script src="/static/app.js?v=20260908-knowledge-summary" defer></script>
     <script src="/static/product-import.js?v=20260908-product-import" defer></script>
   </body>
 </html>
