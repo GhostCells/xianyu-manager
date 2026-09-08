@@ -245,6 +245,12 @@ class DeliveryReconcile(BaseModel):
     order_id: str = Field(pattern=r"^\d{10,}$")
 
 
+class ApprovedOrderRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    account_id: int = Field(strict=True, gt=0)
+    order_id: str = Field(pattern=r'^[0-9]{10,30}$')
+
+
 class AutoReplySettingsUpdate(BaseModel):
     enabled: bool = False
     base_url: str = Field(default=DEFAULT_BASE_URL, max_length=200)
@@ -667,6 +673,32 @@ async def reconcile_delivery(payload: DeliveryReconcile) -> dict[str, object]:
         return await delivery_service.reconcile_order(payload.order_id)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+async def _approved_order_action(payload, action_header, *, execute):
+    if action_header != 'approved-single-order':
+        raise HTTPException(status_code=403, detail='EXPLICIT_ORDER_APPROVAL_REQUIRED')
+    try:
+        return await delivery_service.approved_order(
+            payload.account_id, payload.order_id, library=settings.product_library, execute=execute,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        # Never reflect arbitrary platform response text or filesystem paths.
+        allowed = ('APPROVED_ORDER_', 'ORDER_', 'PLATFORM_PAYMENT_TIME_', 'FULFILLMENT_', 'REPLY_ONLY_', 'RUNTIME_')
+        code = str(exc)
+        if not code.startswith(allowed) or not all(c.isupper() or c == '_' for c in code):
+            code = 'APPROVED_ORDER_CHECK_FAILED'
+        raise HTTPException(status_code=409, detail=code) from exc
+
+
+@app.post('/api/delivery/approved-order/preview')
+async def preview_approved_order(payload: ApprovedOrderRequest, x_order_action: str = Header(default='')):
+    return await _approved_order_action(payload, x_order_action, execute=False)
+
+
+@app.post('/api/delivery/approved-order/execute')
+async def execute_approved_order(payload: ApprovedOrderRequest, x_order_action: str = Header(default='')):
+    return await _approved_order_action(payload, x_order_action, execute=True)
 
 
 @app.post("/api/delivery/stop")

@@ -543,6 +543,7 @@ class DeliveryService:
         self._send_lock = asyncio.Lock()
         self._outbound_lock = asyncio.Lock()
         self._listing_sync_lock = asyncio.Lock()
+        self._approved_order_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._event_tasks: set[asyncio.Task[None]] = set()
         self._reply_tasks: dict[str, PendingAutoReply] = {}
@@ -653,6 +654,60 @@ class DeliveryService:
                 "synced_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "listings": listings,
             }
+
+    @business_operation
+    async def approved_order(self, account_id, order_id, *, library, execute=False):
+        """Explicit single-order action; preview never claims, sends or creates chats."""
+        from .approved_order import require_fresh_order, require_current_package
+        from .order_cutoff import require_after_cutoff
+        async with self._approved_order_lock:
+            self.runtime_policy.require_fulfillment()
+            self.runtime_policy.require_account(account_id)
+            if self.runtime_policy.account_id != account_id or self.runtime_policy.order_recovery_enabled:
+                raise ValueError('APPROVED_ORDER_RUNTIME_MISMATCH')
+            if not isinstance(order_id, str) or not re.fullmatch(r'[0-9]{10,30}', order_id):
+                raise ValueError('APPROVED_ORDER_ID_INVALID')
+            account = self.database.get_account(account_id)
+            if not account or not account.get('delivery_enabled'):
+                raise ValueError('APPROVED_ORDER_DELIVERY_DISABLED')
+            if self._status != 'listening' or self._account_id != account_id or self._runtime_websocket is None or self._runtime_cookie_map is None:
+                raise ValueError('APPROVED_ORDER_SESSION_NOT_READY')
+            preview = await self._fetch_recent_sold_orders(self._runtime_cookie_map, exact_order_id=order_id)
+            rows = preview.get('orders', [])
+            if len(rows) != 1 or rows[0].get('order_id') != order_id:
+                raise ValueError('APPROVED_ORDER_NOT_UNIQUE')
+            row = rows[0]
+            if row.get('order_status') not in {'待发货', 'pending_ship'}:
+                raise ValueError('APPROVED_ORDER_NOT_PENDING_SHIP')
+            payment = require_after_cutoff(self.runtime_policy.order_cutoff_at, row.get('paid_time'))
+            item_id, buyer_id = row.get('item_id'), row.get('buyer_id')
+            if not re.fullmatch(r'[0-9]{8,}', str(item_id or '')) or not re.fullmatch(r'[0-9]{5,}', str(buyer_id or '')):
+                raise ValueError('APPROVED_ORDER_IDENTITY_INVALID')
+            self.runtime_policy.require_delivery_item(item_id)
+            product = self.database.get_product_by_listing_item_id(item_id, account_id)
+            if product is None or delivery_issues(product):
+                raise ValueError('APPROVED_ORDER_PRODUCT_NOT_QUALIFIED')
+            require_current_package(library, product)
+            chat_id = require_fresh_order(self.database, account_id, order_id, buyer_id, item_id)
+            safety = self.database.check_automation_outbound(account_id, 'delivery')
+            if not safety['allowed']:
+                raise ValueError('APPROVED_ORDER_SAFETY_BLOCKED')
+            result = {'account_id': account_id, 'order_short_id': order_id[-6:], 'item_id': item_id,
+                      'product': product['dir_name'], 'paid_time_utc': payment.isoformat(),
+                      'platform_status': row['order_status'], 'precheck_passed': True, 'executed': False}
+            if not execute:
+                return result
+            # No alternative claim/send implementation; all existing gates run again.
+            await self._process_paid_event(
+                self._runtime_websocket, account_id, self._runtime_seller_id, self._runtime_cookie_map,
+                {'orderId': order_id, 'itemId': item_id, 'buyerId': buyer_id, 'sid': chat_id},
+                approved_order_id=order_id,
+            )
+            order = self.database.get_order(order_id) or {}
+            return {**result, 'executed': True, 'delivery_status': order.get('delivery_status'),
+                    'message_sent_at': order.get('message_sent_at'),
+                    'message_hash_present': bool(order.get('delivery_message_hash')),
+                    'platform_confirm_status': order.get('platform_confirm_status')}
 
     @business_operation
     async def reconcile_order(self, order_id: str) -> dict[str, object]:
@@ -1939,6 +1994,7 @@ class DeliveryService:
         seller_id: str,
         cookie_map: dict[str, str],
         event: dict[str, Any],
+        *, approved_order_id: str | None = None,
     ) -> None:
         if not self.runtime_policy.fulfillment_enabled:
             return
@@ -2002,7 +2058,10 @@ class DeliveryService:
         # All live, recovery and manual reconciliation routes re-read the exact
         # seller order. Event timestamps are not proof of payment time.
         try:
-            payment_time = await self._verified_payment_time(account_id, order_id, item_id, buyer_id, cookie_map)
+            if approved_order_id is not None and approved_order_id != order_id:
+                raise ValueError('APPROVED_ORDER_ID_MISMATCH')
+            kwargs = {'exact_order_id': approved_order_id} if approved_order_id else {}
+            payment_time = await self._verified_payment_time(account_id, order_id, item_id, buyer_id, cookie_map, **kwargs)
         except (ValueError, RuntimeError) as exc:
             self._last_error = f'ORDER_CUTOFF_BLOCKED: {type(exc).__name__}'
             from .order_cutoff import OrderCutoffBlocked
@@ -2127,13 +2186,14 @@ class DeliveryService:
                 raise
             self.database.finish_automation_outbound(event_id, sent=True)
 
-    async def _verified_payment_time(self, account_id, order_id, item_id, buyer_id, cookie_map):
+    async def _verified_payment_time(self, account_id, order_id, item_id, buyer_id, cookie_map, *, exact_order_id=None):
         from .order_cutoff import OrderCutoffBlocked, require_after_cutoff
         self.runtime_policy.require_fulfillment()
         self.runtime_policy.require_account(account_id)
         if self._account_id != account_id:
             raise OrderCutoffBlocked('ORDER_ACCOUNT_MISMATCH')
-        preview = await self._fetch_recent_sold_orders(cookie_map)
+        kwargs = {'exact_order_id': exact_order_id} if exact_order_id else {}
+        preview = await self._fetch_recent_sold_orders(cookie_map, **kwargs)
         matches = [row for row in preview.get('orders', []) if isinstance(row, dict) and row.get('order_id') == order_id]
         if len(matches) != 1:
             raise OrderCutoffBlocked('PLATFORM_ORDER_NOT_UNIQUE_OR_NOT_FOUND')
@@ -2460,14 +2520,16 @@ class DeliveryService:
 
     @business_operation
     async def _fetch_recent_sold_orders(
-        self, cookie_map: dict[str, str], *, page_size: int = 20
+        self, cookie_map: dict[str, str], *, page_size: int = 20, exact_order_id: str | None = None
     ) -> dict[str, object]:
         """Fetch a read-only, bounded preview of the newest seller orders."""
+        if exact_order_id is not None and not re.fullmatch(r'[0-9]{10,30}', exact_order_id):
+            raise ValueError('APPROVED_ORDER_ID_INVALID')
         data_json = json.dumps(
             {
                 "pageNumber": 1,
                 "rowsPerPage": max(1, min(page_size, 20)),
-                "orderIds": "",
+                "orderIds": exact_order_id or "",
                 "queryCode": "ALL",
                 "orderSearchParam": "{}",
             },
@@ -2516,6 +2578,13 @@ class DeliveryService:
 
         module = payload.get("data", {}).get("module", {})
         raw_items = module.get("items", []) if isinstance(module, dict) else []
+        if exact_order_id is not None and (
+            not isinstance(raw_items, list) or len(raw_items) != 1
+            or not isinstance(raw_items[0], dict)
+            or not isinstance(raw_items[0].get('commonData'), dict)
+            or str(raw_items[0]['commonData'].get('orderId')) != exact_order_id
+        ):
+            raise ValueError('APPROVED_ORDER_TARGET_QUERY_NOT_UNIQUE')
         orders: list[dict[str, object]] = []
         for raw in raw_items if isinstance(raw_items, list) else []:
             if not isinstance(raw, dict):
