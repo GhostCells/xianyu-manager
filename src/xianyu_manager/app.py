@@ -94,6 +94,9 @@ async def lifespan(_: FastAPI):
         while True:
             await asyncio.sleep(2)
             if runtime_policy.managed and not runtime_policy.egress_status()['ready']:
+                # A startup failure can latch policy before any owner exists.
+                if runtime_policy._state.get('egress_latched') and not recovery.blocked:
+                    recovery.block()
                 if delivery_service._task is not None or session_manager._context is not None:
                     runtime_policy._state['egress_latched'] = True
                     recovery.block()
@@ -109,7 +112,8 @@ async def lifespan(_: FastAPI):
                 if not raw['ready'] or raw.get('probe_state') != 'EGRESS_READY':
                     if recovery.blocked:
                         recovery.block()
-                elif (recovery_allowed(runtime_policy)
+                elif (recovery_allowed(runtime_policy, delivery_enabled=bool(
+                          (database.get_account(runtime_policy.account_id) or {}).get('delivery_enabled')))
                       and (resident is None or resident.done())
                       and recovery.ready(checked_at=raw['checked_at'], now=asyncio.get_running_loop().time())):
                     runtime_policy._state['egress_latched'] = False

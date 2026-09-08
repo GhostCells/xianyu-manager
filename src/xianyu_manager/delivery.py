@@ -605,6 +605,7 @@ class DeliveryService:
             "recovered_order_count": self._recovered_order_count,
             "last_auto_reply_at": self._last_auto_reply_at,
             "last_auto_reply_error": self._last_auto_reply_error,
+            "message_auth_diagnostics": list(getattr(self, '_message_auth_diagnostics', [])),
             "orders": self.database.list_orders(self._account_id) if self._account_id else [],
         }
 
@@ -1335,6 +1336,11 @@ class DeliveryService:
                         cookie_map[cookie.name] = cookie.value
                 payload = response.json()
             ret = payload.get("ret", []) if isinstance(payload, dict) else []
+            from .message_auth_diagnostics import auth_evidence
+            evidence = auth_evidence(
+                getattr(response, 'status', getattr(response, 'status_code', None)),
+                ret, device_id, request_context)
+            self._message_auth_diagnostics = (getattr(self, '_message_auth_diagnostics', []) + [evidence])[-6:]
             last_ret = "; ".join(str(item) for item in ret)[:240]
             access_token = str(payload.get("data", {}).get("accessToken", "")) if isinstance(payload, dict) else ""
             if access_token and any("SUCCESS" in str(item) for item in ret):

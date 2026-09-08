@@ -70,6 +70,10 @@ def test_recovery_once_and_cooldown():
 def test_recovery_never_enables_fulfillment():
     p=RuntimePolicy(account_id=2,reply_only=True,resident_reply=True)
     assert recovery_allowed(p)
-    for q in [replace(p,reply_only=False),replace(p,account_id=1),replace(p,prepare_mode=True),replace(p,order_cutoff_at='2026-01-01T00:00:00Z')]:
+    for q in [replace(p,reply_only=False),replace(p,account_id=1),replace(p,prepare_mode=True)]:
         assert not recovery_allowed(q)
+    assert recovery_allowed(replace(p,order_cutoff_at='2026-01-01T00:00:00Z'))
+    candidate=replace(p,reply_only=False,mvp_fulfillment=True,order_cutoff_at='2026-01-01T00:00:00Z')
+    assert recovery_allowed(candidate,delivery_enabled=False)
+    assert not recovery_allowed(candidate,delivery_enabled=True)
     assert not p.fulfillment_enabled and not p.order_recovery_enabled
