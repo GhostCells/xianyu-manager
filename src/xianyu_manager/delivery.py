@@ -27,6 +27,7 @@ from .auto_reply import (
 )
 from .database import Database
 from .browser_launch import sandbox_options
+from .order_cutoff import merchant_pay_success_time
 from .fulfillment_rules import compose_delivery_message, delivery_issues, parse_listing_id
 from .runtime_policy import PROCESS_POLICY, RuntimePolicy, business_operation
 from .notifications import WindowsNotifier
@@ -2539,7 +2540,7 @@ class DeliveryService:
                     "buyer_nick": str(buyer.get("userNick") or "").strip(),
                     "order_status": str(common.get("orderStatus") or "").strip(),
                     "create_time": str(common.get("createTime") or "").strip(),
-                    "paid_time": str(common.get("paySuccessTime") or "").strip(),
+                    "paid_time": merchant_pay_success_time(common.get("paySuccessTime")),
                     "diagnostics": diagnostics,
                 }
             )
