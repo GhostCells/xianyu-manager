@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from .fulfillment_rules import parse_listing_id, package_safety_fingerprint
 from .delivery_package import check_zip, check_registered_package, tree_hash
 from .product_ownership import has_foreign_product_use
-from .knowledge import load_knowledge_folder, TEXT_EXTENSIONS
+from .knowledge import load_knowledge_folder, TEXT_EXTENSIONS, KnowledgeFolderResult
 from .scanner import ScannedProduct, sha256_file
 
 MAX_FILES = 20000
@@ -28,6 +28,18 @@ MAX_FILE = MAX_TOTAL
 MAX_STORAGE = 4 * 1024**3
 MAX_MANIFEST_BYTES = 32 * 1024**2
 TTL = 24 * 3600
+
+
+def delivery_zip_path(value):
+    path = PurePosixPath(value)
+    return path.suffix.lower() == '.zip' and (len(path.parts) == 1 or path.parts[0] == '客户交付')
+
+
+def import_knowledge(folder):
+    # ZIP-only imports must not manufacture knowledge or read ZIP contents.
+    if not any(p.suffix.lower() in TEXT_EXTENSIONS | {'.pdf'} for p in folder.rglob('*') if p.is_file()):
+        return KnowledgeFolderResult(str(folder), '', '', 0, 0, 0, ())
+    return load_knowledge_folder(folder)
 
 
 class ImportStorageNotReady(ValueError):
@@ -230,13 +242,13 @@ class ProductImport:
                 p = directory / f'{i}.blob'
                 if not p.is_file() or p.stat().st_size != f['size']:
                     raise ValueError('文件尚未完整上传')
-            packages = [{'index': i, 'path': f['path'], 'size': f['size']} for i, f in enumerate(job['files']) if PurePosixPath(f['path']).parts[0] == '客户交付' and f['path'].lower().endswith('.zip')]
+            packages = [{'index': i, 'path': f['path'], 'size': f['size']} for i, f in enumerate(job['files']) if delivery_zip_path(f['path'])]
             if zip_index is None and delivery_kind == 'zip':
                 if len(packages) != 1:
                     return {'requires_zip_selection': True, 'packages': packages, 'message': '请选择客户交付中的一个ZIP，或选择网盘资料交付' if packages else '没有交付ZIP；教程等商品可选择“网盘资料交付（无ZIP）”，再生成预览'}
                 zip_index = packages[0]['index']
             if delivery_kind == 'zip' and zip_index not in {p['index'] for p in packages}:
-                raise ValueError('只能选择客户交付目录中的ZIP')
+                raise ValueError('只能选择商品根目录或客户交付目录中的ZIP')
             if delivery_kind == 'zip':
                 package = directory / f'{zip_index}.blob'
                 check_zip(package)
@@ -262,9 +274,13 @@ class ProductImport:
                     if dest.exists():
                         raise ValueError('商品图片文件名冲突，请整理后重试')
                     shutil.copyfile(directory / f'{i}.blob', dest)
-            knowledge = load_knowledge_folder(knowledge_dir)
-            if not knowledge.text.strip():
-                raise ValueError('商品资料未提取到有效知识，原生产资料未变更')
+            knowledge = import_knowledge(knowledge_dir)
+            if not knowledge.text:
+                with self.db.connect() as c:
+                    _, existing, _ = self._target(c, account_id, job['item_id'], job['name'])
+                text = (existing or {}).get('knowledge_text') or ''
+                knowledge = KnowledgeFolderResult('', text, '', len(text), 0, 0,
+                    ('未提供商品知识：保留该商品已有知识。' if text else '暂无自动回复知识；交付资料可以导入，需另补知识才能用于商品问答。',))
             zip_name = PurePosixPath(job['files'][zip_index]['path']).name if delivery_kind == 'zip' else ''
             if zip_name:
                 shutil.copyfile(package, candidate / zip_name)
@@ -297,7 +313,7 @@ class ProductImport:
             kind = job.get('delivery_kind', 'zip')
             zip_name = PurePosixPath(job['files'][job['zip_index']]['path']).name if kind == 'zip' else ''
             scanned = import_metadata(candidate, zip_name)
-            knowledge = load_knowledge_folder(candidate / '商品资料')
+            knowledge = import_knowledge(candidate / '商品资料')
             with self.db.connect() as c:
                 c.execute('BEGIN IMMEDIATE')
                 listing, product, configured = self._target(c, account_id, job['item_id'], job['name'])
@@ -331,6 +347,10 @@ class ProductImport:
                         share_verified=0,share_needs_review=1,verified_fingerprint='',delivery_safety_fingerprint=?,delivery_kind=?,delivery_revision=?,updated_at=CURRENT_TIMESTAMP WHERE dir_name=?''',
                               (scanned.zip_name,scanned.zip_hash,scanned.zip_size,scanned.image_count,scanned.quality_status,json.dumps(scanned.quality_errors,ensure_ascii=False),scanned.scanned_at,
                                knowledge.text,knowledge.content_hash,knowledge.chars,str(target/'商品资料'),knowledge.file_count,package_safety_fingerprint(scanned.to_dict()) if kind == 'zip' else '',kind,job['candidate_hash'] if kind == 'cloud' else '',job['name']))
+                    if not knowledge.text and product:
+                        # Retain the cached corpus without pointing at replaced files.
+                        c.execute('''UPDATE products SET knowledge_text=?,knowledge_hash=?,knowledge_chars=?,knowledge_file_count=?,knowledge_updated_at=?,knowledge_source_path='' WHERE dir_name=?''',
+                                  (product.get('knowledge_text') or '',product.get('knowledge_hash') or '',product.get('knowledge_chars') or 0,product.get('knowledge_file_count') or 0,product.get('knowledge_updated_at'),job['name']))
                     # Explicitly selected listing only; never fuzzy-match or touch other mappings.
                     if not configured:
                         c.execute('''INSERT INTO account_products(account_id,product_dir_name,enabled,listing_url,listing_status) VALUES(?,?,1,?,'published')''',
@@ -374,7 +394,7 @@ class ProductImport:
                 self.db._require_no_pending_delivery(c, job['name'])
                 selected = job['files'][job['zip_index']]
                 blob = directory / f"{job['zip_index']}.blob"
-                if (PurePosixPath(selected['path']).parts[0] != '客户交付'
+                if (not delivery_zip_path(selected['path'])
                         or PurePosixPath(selected['path']).name != product['zip_name']
                         or selected['size'] != product['zip_size']
                         or sha256_file(blob) != product['zip_hash']):
