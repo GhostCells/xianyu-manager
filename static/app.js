@@ -118,8 +118,7 @@ function renderLiveListings(listings) {
       </div>
       <div class="row-actions">
         <a class="secondary link-button" href="${escapeHtml(listing.listing_url)}" target="_blank" rel="noreferrer">打开闲鱼</a>
-        ${product ? `<button class="primary edit-button" data-dir="${escapeHtml(product.dir_name)}">配置交付</button>` : ""}
-        <button class="secondary import-product-button" type="button" data-item-id="${escapeHtml(listing.item_id)}">导入商品包</button>
+        ${product ? `<button class="primary edit-button" data-dir="${escapeHtml(product.dir_name)}">准备交付资料</button>` : `<button class="primary import-product-button" type="button" data-item-id="${escapeHtml(listing.item_id)}">准备交付资料</button>`}
         ${mappingControls}
       </div>
     </article>`;
@@ -660,6 +659,13 @@ function openEdit(dirName) {
   el("dialogTitle").textContent = product.name;
   const exactListing = state.listings.find(item => item.matched_product_dir_name === product.dir_name && item.listing_url === product.listing_url);
   el("editProductIdentity").textContent = `闲鱼商品：${exactListing?.title || product.title || '未登记标题'}；本地商品：${product.dir_name}`;
+  const mappedListings = state.listings.filter(item => item.matched_product_dir_name === product.dir_name);
+  // Never guess which listing to import into when the exact mapping is ambiguous.
+  const importListing = mappedListings.length === 1 ? mappedListings[0] : null;
+  el('editImportProduct').dataset.itemId = importListing?.item_id || '';
+  el('editImportProduct').disabled = !importListing;
+  el('deliveryMaintenance').open = false;
+  el('verificationDetails').open = false;
   el("enabledForAccount").checked = Boolean(product.enabled_for_account);
   const legacyBlocked = product.catalog_status === "legacy" && !product.enabled_for_account;
   el("enabledForAccount").disabled = legacyBlocked;
@@ -686,16 +692,33 @@ function renderShareVerification(product, changed = false) {
     Array.isArray(product.delivery_issues) && !product.delivery_issues.length;
   const status = el('shareVerificationStatus');
   status.style.color = verified ? '#167342' : '#8a5100';
-  status.textContent = changed ? '⚠ 交付资料已变化，需要重新核验（先保存）' : verified
+  const issues = product.delivery_issues || ['VERIFICATION_VERSION_UNCONFIRMED'];
+  const packageMissing = issues.includes('DELIVERY_PACKAGE_UNCONFIRMED');
+  const qualityBlocked = issues.includes('QUALITY_BLOCKED');
+  el('deliveryPackageStatus').textContent = product.zip_name && product.zip_hash
+    ? `已登记：${product.zip_name} · 版本 ${product.zip_hash.slice(0,12)}${qualityBlocked ? ' · 质量检查未通过，请查看阻断原因' : ''}`
+    : '尚未登记交付ZIP，请先导入商品包；已有知识不代表交付包已就绪。';
+  el('shareSaveStatus').textContent = changed ? '有未保存的修改，请先保存网盘信息。'
+    : product.share_url ? '当前网盘信息已保存。' : '尚未保存网盘链接。';
+  el('verificationDetails').hidden = verified || !issues.length;
+  el('verificationDetailText').textContent = shareErrorMessage([...new Set(issues)].join(','));
+  status.textContent = changed ? '⚠ 交付资料已变化，需要重新核验；请先完成第2步保存。' : verified
     ? `✓ 当前交付版本已人工核验 · 时间：${product.share_verified_at || '未记录'} · 核验摘要：${product.verified_fingerprint.slice(0,12)} · ZIP：${(product.zip_hash || '').slice(0,12)}`
-    : `⚠ 当前交付版本待人工核验 · ${shareErrorMessage((product.delivery_issues || ['VERIFICATION_VERSION_UNCONFIRMED']).join(','))} · ZIP：${(product.zip_hash || '').slice(0,12) || '未登记'}`;
-  el('confirmShare').disabled = Boolean(state.shareConfirmPending || verified || changed);
+    : packageMissing ? '⚠ 尚未登记交付ZIP，请先完成第1步导入。'
+    : qualityBlocked ? '⚠ 交付包质量检查未通过，请先处理具体阻断原因。'
+    : !product.share_url ? '⚠ 请先完成第2步，保存网盘信息。'
+    : '⚠ 当前交付版本待人工核验。请本人打开网盘核对后确认。';
+  el('confirmShare').disabled = Boolean(state.shareConfirmPending || state.editSavePending || verified || changed || packageMissing || qualityBlocked || !product.share_url);
   el('confirmShare').textContent = verified ? '当前版本已核验' : '我已人工核验当前交付资料';
 }
 
 function shareFieldsChanged() {
   const product = state.products.find(item => item.dir_name === el('editDirName').value);
-  if (product) renderShareVerification(product, product.zip_hash !== state.editZipHash || ['share_url','share_code'].some(k => readEditFields()[k] !== state.editBaseline[k]));
+  if (product) {
+    const changed = product.zip_hash !== state.editZipHash || ['share_url','share_code'].some(k => readEditFields()[k] !== state.editBaseline[k]);
+    if (changed) el('editNotice').textContent = '';
+    renderShareVerification(product, changed);
+  }
 }
 
 async function updateKnowledgeFolder(mode, button) {
@@ -752,13 +775,14 @@ function editedFields() {
 
 async function confirmShare(revoke = false) {
   if (state.shareConfirmPending || state.editSavePending) return;
-  if (Object.keys(editedFields()).length) { el("formError").textContent = "请先点击保存配置，保存后可在本窗口继续人工核验"; return; }
+  if (Object.keys(editedFields()).length) { el("formError").textContent = "请先保存已修改的网盘信息或维护设置，再继续人工核验"; return; }
   el('formError').textContent = '';
   el('editNotice').textContent = '';
   const dirName = el("editDirName").value;
   state.shareConfirmPending = true;
   el('confirmShare').disabled = el('revokeShare').disabled = true;
   el('shareUrl').disabled = el('shareCode').disabled = true;
+  el('saveShareButton').disabled = el('editImportProduct').disabled = true;
   el('confirmShare').textContent = '正在确认…';
   try {
   const response = await fetch(`/api/products/${encodeURIComponent(dirName)}${revoke ? "" : "/verify-share"}`, {
@@ -775,22 +799,28 @@ async function confirmShare(revoke = false) {
     state.shareConfirmPending = false;
     el('revokeShare').disabled = false;
     el('shareUrl').disabled = el('shareCode').disabled = false;
+    el('saveShareButton').disabled = false;
+    el('editImportProduct').disabled = !el('editImportProduct').dataset.itemId;
     const product = state.products?.find(item => item.dir_name === dirName);
     if (product && el('editDirName').value === dirName) shareFieldsChanged();
     else { el('confirmShare').disabled = false; el('confirmShare').textContent = '我已人工核验当前交付资料'; }
   }
 }
 
-async function saveEdit(event) {
+async function saveEdit(event, shareOnly = false) {
   event.preventDefault();
   if (state.editSavePending || state.shareConfirmPending) return;
+  if (shareOnly && !el('shareUrl').reportValidity()) return;
   const dirName = el("editDirName").value;
-  const payload = editedFields();
+  const allEdits = editedFields();
+  const payload = shareOnly ? Object.fromEntries(Object.entries(allEdits).filter(([key]) => ['share_url','share_code'].includes(key))) : allEdits;
+  const maintenanceDraft = shareOnly ? Object.fromEntries(Object.entries(allEdits).filter(([key]) => !['share_url','share_code'].includes(key))) : {};
   state.editSavePending = true;
-  const controls = ['saveEditButton','confirmShare','revokeShare','shareUrl','shareCode','enabledForAccount','suggestedPrice','confirmedPrice','listingUrl','listingStatus'];
+  const controls = ['saveEditButton','saveShareButton','editImportProduct','confirmShare','revokeShare','shareUrl','shareCode','enabledForAccount','suggestedPrice','confirmedPrice','listingUrl','listingStatus'];
   const disabled = controls.map(id => [id, el(id).disabled]);
   controls.forEach(id => { el(id).disabled = true; });
   el('saveEditButton').textContent = '正在保存…';
+  el('saveShareButton').textContent = '正在保存…';
   el('formError').textContent = '';
   el('editNotice').textContent = '';
   let saved = false;
@@ -798,17 +828,26 @@ async function saveEdit(event) {
     const response = await fetch(`/api/products/${encodeURIComponent(dirName)}`, {method:"PATCH", headers:{"Content-Type":"application/json", "X-Preparation-Action":"confirm-local"}, body:JSON.stringify(payload)});
     if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(shareErrorMessage(error.detail || '保存失败')); }
     saved = true;
+    if (shareOnly) el('shareSaveStatus').textContent = '网盘信息已保存，正在读取最新状态…';
     await loadProducts();
     if (el('editDirName').value === dirName && el('editDialog').open) {
       openEdit(dirName);
-      el('editNotice').textContent = '配置已保存，可在本窗口继续人工核验；保存本身不会核验或开放发货。';
+      // Saving the share must not silently discard edits in the maintenance drawer.
+      const draftControls = {enabled_for_account:'enabledForAccount', suggested_price_cents:'suggestedPrice', confirmed_price_cents:'confirmedPrice', listing_url:'listingUrl', listing_status:'listingStatus'};
+      for (const [key, value] of Object.entries(maintenanceDraft)) {
+        const control = el(draftControls[key]);
+        if (key === 'enabled_for_account') control.checked = value;
+        else control.value = key.endsWith('_cents') ? centsToInput(value) : value || '';
+      }
+      el('editNotice').textContent = `${shareOnly ? '网盘信息' : '配置'}已保存。保存不代表核验或开放发货。${Object.keys(maintenanceDraft).length ? '维护设置仍有未保存修改。' : '请按第3步完成必要的人工核验。'}`;
     }
   } catch (error) {
     el('formError').textContent = saved ? '保存已成功，但最新状态读取失败；请重新打开配置确认后再核验。' : shareErrorMessage(error.message || '保存失败，请检查连接');
   } finally {
     state.editSavePending = false;
     disabled.forEach(([id, value]) => { el(id).disabled = value; });
-    el('saveEditButton').textContent = '保存配置';
+    el('saveEditButton').textContent = '保存维护设置';
+    el('saveShareButton').textContent = '保存网盘信息';
     if (state.products?.some(p => p.dir_name === dirName)) shareFieldsChanged();
     if (saved && el('formError').textContent) el('confirmShare').disabled = true;
   }
@@ -927,11 +966,19 @@ el("productList").addEventListener("input", (event) => {
   if (button) button.disabled = !select.value;
 });
 el("editForm").addEventListener("submit", saveEdit);
+el('saveShareButton').addEventListener('click', event => saveEdit(event, true));
 el("pickKnowledgeFolder").addEventListener("click", (event) => updateKnowledgeFolder("pick", event.currentTarget));
 el("loadKnowledgeFolder").addEventListener("click", (event) => updateKnowledgeFolder("load", event.currentTarget));
 el("clearKnowledgeFolder").addEventListener("click", (event) => updateKnowledgeFolder("clear", event.currentTarget));
-el("closeDialog").addEventListener("click", () => el("editDialog").close());
-el("cancelEdit").addEventListener("click", () => el("editDialog").close());
+function closeDeliverySetup() {
+  if (state.editSavePending || state.shareConfirmPending) return;
+  el('editDialog').close();
+}
+el("closeDialog").addEventListener("click", closeDeliverySetup);
+el("cancelEdit").addEventListener("click", closeDeliverySetup);
+el('editDialog').addEventListener('cancel', event => {
+  if (state.editSavePending || state.shareConfirmPending) event.preventDefault();
+});
 el("startBinding").addEventListener("click", () => sessionAction("start"));
 el("confirmBinding").addEventListener("click", () => sessionAction("confirm"));
 el("syncBinding").addEventListener("click", () => sessionAction("sync"));

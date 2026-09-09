@@ -6,12 +6,12 @@ def test_verification_feedback_loading_errors_and_identity():
     script = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync('static/app.js','utf8'), elements={};
-const el=id=>elements[id]||(elements[id]={value:'',style:{},checked:false,open:true,showModal(){throw Error('must remain open')}});
+const el=id=>elements[id]||(elements[id]={value:'',style:{},dataset:{},checked:false,open:true,reportValidity(){return true},showModal(){throw Error('must remain open')}});
 const p={dir_name:'20-Seedance2.5',name:'local name',title:'registered title',listing_url:'exact',
 share_url:'url',share_code:'code',zip_hash:'a'.repeat(64),fulfillment_fingerprint:'b'.repeat(64),delivery_issues:['VERIFICATION_VERSION_UNCONFIRMED']};
 const notices=[],requests=[];let resolve;
 const ctx={el,state:{products:[p],listings:[{matched_product_dir_name:p.dir_name,listing_url:'exact',title:'platform title'}]},
-Object,JSON,Boolean,Array,encodeURIComponent,centsToInput:()=>'',inputToCents:()=>null,renderKnowledgeEditor:()=>{},
+Object,JSON,Boolean,Array,encodeURIComponent,centsToInput:v=>v==null?'':(v/100).toFixed(2),inputToCents:v=>v===''?null:Math.round(Number(v)*100),renderKnowledgeEditor:()=>{},
 showActionNotice:(m,e)=>notices.push([m,e]),loadProducts:async()=>{},
 fetch:()=>{requests.push(1);return new Promise(r=>resolve=r)}};
 vm.createContext(ctx);
@@ -22,7 +22,7 @@ ctx.openEdit(p.dir_name);assert(el('editProductIdentity').textContent.includes('
 const first=ctx.confirmShare();await ctx.confirmShare();assert.equal(requests.length,1);assert.equal(el('confirmShare').textContent,'正在确认…');
 p.share_verified=true;p.verified_fingerprint=p.fulfillment_fingerprint;p.share_verified_at='synthetic time';p.delivery_issues=[];
 resolve({ok:true});await first;assert(el('shareVerificationStatus').textContent.startsWith('✓'));assert(el('confirmShare').disabled);assert(el('editNotice').textContent.includes('成功'));assert.equal(notices.length,0);
-el('shareUrl').value='changed';ctx.shareFieldsChanged();assert(el('shareVerificationStatus').textContent.includes('已变化'));assert(el('confirmShare').disabled);
+el('shareUrl').value='changed';ctx.shareFieldsChanged();assert(el('shareVerificationStatus').textContent.includes('已变化'));assert(el('confirmShare').disabled);assert.equal(el('editNotice').textContent,'');
 el('shareUrl').value='url';ctx.shareFieldsChanged();assert(el('shareVerificationStatus').textContent.startsWith('✓'));
 p.zip_hash='c'.repeat(64);p.fulfillment_fingerprint='d'.repeat(64);ctx.openEdit(p.dir_name);assert(el('shareVerificationStatus').textContent.startsWith('⚠'));
 const fail=ctx.confirmShare();resolve({ok:false,json:async()=>({detail:'synthetic failure'})});await fail;
@@ -41,6 +41,15 @@ assert(el('editDialog').open);assert(el('formError').textContent.includes('质�
 assert(!ctx.state.editSavePending);assert(!el('saveEditButton').disabled);
 ctx.fetch=async()=>{throw Error('network unavailable')};await ctx.saveEdit({preventDefault(){}});
 assert(el('formError').textContent.includes('network unavailable'));assert(!ctx.state.editSavePending);
+// One explicit share save must not patch or discard maintenance drafts.
+ctx.openEdit(p.dir_name);el('confirmedPrice').value='19';el('shareUrl').value='saved-link';
+let body;ctx.fetch=async(url,options)=>{body=JSON.parse(options.body);p.share_url=body.share_url;return {ok:true}};
+await ctx.saveEdit({preventDefault(){}},true);
+assert.deepEqual(body,{share_url:'saved-link'});assert.equal(el('confirmedPrice').value,'19.00');
+assert(el('editNotice').textContent.includes('维护设置仍有未保存'));
+ctx.renderShareVerification({...p,delivery_issues:['DELIVERY_PACKAGE_UNCONFIRMED','QUALITY_BLOCKED','SHARE_UNVERIFIED']});
+assert(el('shareVerificationStatus').textContent.includes('第1步'));assert(!el('shareVerificationStatus').textContent.includes('质量'));
+assert(el('confirmShare').disabled);assert(el('verificationDetailText').textContent.includes('质量'));
 })().catch(e=>{console.error(e);process.exitCode=1});
 """
     result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
