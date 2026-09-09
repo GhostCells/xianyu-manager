@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 from starlette.concurrency import run_in_threadpool
-from .product_import import ProductImport, MAX_MANIFEST_BYTES
+from .product_import import ProductImport, MAX_MANIFEST_BYTES, ImportStorageNotReady
 
 from .auto_reply import (
     DEFAULT_BASE_URL,
@@ -992,6 +992,10 @@ async def _import_json(request):
 async def _import_call(fn, *args):
     try:
         return await run_in_threadpool(fn, *args)
+    except ImportStorageNotReady as exc:
+        return JSONResponse(status_code=409, content={
+            'detail':str(exc), 'code':'IMPORT_STORAGE_NOT_READY', 'import_state':'not_applied',
+        })
     except (ValueError, KeyError, TypeError, OSError) as exc:
         # File-system paths / uploaded contents must not leak through exceptions.
         message = str(exc) if isinstance(exc, ValueError) else '导入参数或文件状态不正确，请检查后重试'

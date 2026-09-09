@@ -29,6 +29,10 @@ MAX_MANIFEST_BYTES = 32 * 1024**2
 TTL = 24 * 3600
 
 
+class ImportStorageNotReady(ValueError):
+    """Raised only before an import can mutate product files/rows."""
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -79,6 +83,33 @@ class ProductImport:
         self.db, self.settings = database, settings
         self.root = settings.data_dir / 'product-imports'
         self.lock = threading.Lock()
+
+    def _prepare_destination(self, name):
+        """No privilege escalation. Repair only our own directory's owner bits."""
+        library = self.settings.product_library
+        target = library / name
+        if target.is_symlink() or (target.exists() and not target.is_dir()):
+            raise ImportStorageNotReady('商品目录状态异常，尚未上传或替换；可关闭窗口，原资料保留')
+        if target.exists() and not os.access(target, os.W_OK | os.X_OK):
+            # Legacy root-owned directories are provisioned once by deployment,
+            # not by a privileged web endpoint. Never chmod another owner's files.
+            if hasattr(os, 'getuid') and target.stat().st_uid == os.getuid():
+                try:
+                    fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        st = os.fstat(fd)
+                        if st.st_uid == os.getuid():
+                            os.fchmod(fd, (st.st_mode & 0o777) | 0o700)
+                    finally:
+                        os.close(fd)
+                except OSError:
+                    pass
+            if not os.access(target, os.W_OK | os.X_OK):
+                raise ImportStorageNotReady('商品存储尚未就绪，尚未替换资料；可关闭窗口，原资料保留')
+        if not os.access(library, os.W_OK | os.X_OK) or not os.access(self.root, os.W_OK | os.X_OK):
+            raise ImportStorageNotReady('商品存储不可写，尚未替换资料；可关闭窗口，原资料保留')
+        if self.root.stat().st_dev != library.stat().st_dev:
+            raise ImportStorageNotReady('归档和商品库需位于同一文件系统，尚未替换资料')
 
     def _save(self, directory, job):
         temp = directory / 'job.tmp'
@@ -160,6 +191,7 @@ class ProductImport:
                 raise ValueError('导入存储空间不足，请先整理归档；不会自动删除旧版本')
             with self.db.connect() as c:
                 listing, product, configured = self._target(c, account_id, item_id, name)
+            self._prepare_destination(name)
             current = self.settings.product_library / name
             job = {'account_id': account_id, 'item_id': item_id, 'name': name, 'folder': folder,
                    'title': listing['title'], 'baseline': digest([listing, product, configured]),
@@ -271,12 +303,7 @@ class ProductImport:
             target = self.settings.product_library / job['name']
             if tree_hash(candidate) != job['candidate_hash'] or tree_hash(target) != job['disk_baseline']:
                 raise ValueError('文件版本已变化，请重新导入预览')
-            if self.root.stat().st_dev != self.settings.product_library.stat().st_dev:
-                raise ValueError('归档和商品库需位于同一文件系统，暂不支持跨盘替换')
-            # A cross-directory rename needs write access to the directory itself
-            # (its '..' entry changes). Check before persisting any applying marker.
-            if target.exists() and not os.access(target, os.W_OK):
-                raise ValueError('旧商品目录不可写，尚未替换资料；请管理员修复该目录权限后重试')
+            self._prepare_destination(job['name'])
             zip_name = PurePosixPath(job['files'][job['zip_index']]['path']).name
             scanned = import_metadata(candidate, zip_name)
             knowledge = load_knowledge_folder(candidate / '商品资料')

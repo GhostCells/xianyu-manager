@@ -66,3 +66,13 @@ def test_twenty_thousand_paths_pass_old_body_limit(client):
     r=c.post('/api/product-imports',headers={'X-Product-Import':'confirm-local'},json={'item_id':'123456789','product_dir':'45-demo','files':files})
     assert r.status_code==200,r.text
     assert r.json()['file_count']==20000
+
+
+def test_preflight_failure_is_explicitly_not_applied(client,intake,monkeypatch):
+    c,_=client
+    monkeypatch.setattr('xianyu_manager.product_import.os.access',lambda *args:False)
+    r=c.post('/api/product-imports',headers={'X-Product-Import':'confirm-local'},json={'item_id':'123456789','product_dir':'45-demo','files':[{'path':'45-demo/a','size':0}]})
+    assert r.status_code==409
+    assert r.json()['code']=='IMPORT_STORAGE_NOT_READY'
+    assert r.json()['import_state']=='not_applied'
+    assert not list(intake[0].root.glob('*/job.json'))

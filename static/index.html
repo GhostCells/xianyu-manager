@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>七月账号商品与发货</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260909-delivery-steps" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260909-upload-close" />
   </head>
   <body>
     <header class="topbar">
@@ -246,7 +246,7 @@
 
     <dialog id="productImportDialog" aria-labelledby="importTitle">
       <form id="productImportForm">
-        <h2 id="importTitle">第1步 · 导入商品包</h2>
+        <div class="dialog-heading import-dialog-heading"><h2 id="importTitle">第1步 · 导入商品包</h2><button id="closeProductImport" type="button" class="icon-button" aria-label="关闭导入窗口，保留记录">×</button></div>
         <p class="knowledge-hint">选择文件夹 → 上传并预览 → 确认导入。完成后继续保存网盘信息。</p>
         <p id="importIdentity"></p>
         <p class="knowledge-hint">原包私有归档；仅“商品资料”用于知识，“客户交付”指定ZIP用于交付。勿上传密码、凭据或无关私人文件。</p>
@@ -268,11 +268,11 @@
         </section>
         <p id="importError" class="error" role="alert"></p>
         <button id="continueImportSetup" type="button" class="primary" hidden>下一步：配置网盘与人工核验</button>
-        <button id="cancelProductImport" type="button" class="secondary">取消 / 关闭</button>
-        <button id="leaveProductImport" type="button" class="secondary" hidden>仅关闭，保留上传现场供检查</button>
+        <button id="cancelProductImport" type="button" class="quiet-button">放弃本次上传并清理暂存</button>
+        <div class="import-dialog-footer"><button id="leaveProductImport" type="button" class="secondary">关闭（保留上传记录）</button><p id="importCloseHint" class="knowledge-hint"></p></div>
       </form>
     </dialog>
     <script src="/static/app.js?v=20260909-package-safety" defer></script>
-    <script src="/static/product-import.js?v=20260909-upload-only" defer></script>
+    <script src="/static/product-import.js?v=20260909-upload-close" defer></script>
   </body>
 </html>

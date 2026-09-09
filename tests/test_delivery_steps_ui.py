@@ -14,6 +14,8 @@ def test_steps_and_maintenance_are_separate():
     assert html.count('id="saveEditButton"') == 1
     assert html.count('id="editNotice"') == 1
     assert 'id="importUploadProgress"' in html
+    assert 'id="closeProductImport"' in html
+    assert 'id="importCloseHint"' in html
 
 
 def test_upload_preview_commit_feedback_and_uncertain_result():
@@ -34,7 +36,7 @@ const ctx={document:{getElementById:el,addEventListener:(t,f)=>listeners[t]=f},
   if(url==='/api/product-imports')return {ok:true,json:async()=>({import_id:'safe'})};
   if(url.endsWith('/preview'))return {ok:true,json:async()=>({preview_id:'v1',title:'synthetic',item_id:'123',product:'35-demo',existing:true,
   packages:[{path:'客户交付/demo.zip',index:0,size:1}],zip_name:'demo.zip',zip_hash:'a'.repeat(64),knowledge_chars:8,knowledge_sources:[],quality_status:'passed',quality_errors:[],knowledge_warnings:[],notice:'synthetic'})};
-  if(url.endsWith('/confirm')){await new Promise(r=>release=r);if(failure)throw Error('synthetic timeout');return {ok:true,json:async()=>({committed:true})};}
+  if(url.endsWith('/confirm')){await new Promise(r=>release=r);if(failure==='permission')return {ok:false,json:async()=>({detail:'存储尚未就绪',code:'IMPORT_STORAGE_NOT_READY',import_state:'not_applied'})};if(failure)throw Error('synthetic timeout');return {ok:true,json:async()=>({committed:true})};}
   return {ok:true,json:async()=>({})};
  }};
 vm.createContext(ctx);vm.runInContext(fs.readFileSync('static/product-import.js','utf8'),ctx);
@@ -52,20 +54,31 @@ el('confirmProductImport').click();el('confirmProductImport').click();
 await new Promise(r=>setImmediate(r));
 assert.equal(calls.filter(c=>c[0].endsWith('/confirm')).length,1);
 assert(el('confirmProductImport').disabled);assert(el('importProgress').textContent.includes('正在保存'));
+// Closing while busy must not abort/delete/retry an uncertain operation.
+el('closeProductImport').click();assert(!el('productImportDialog').open);
+assert(calls.every(c=>c[1]!=='DELETE'));
+listeners.click({target:{closest:()=>button}});assert(el('productImportDialog').open);
+assert.equal(calls.filter(c=>c[0].endsWith('/confirm')).length,1);
 release();await new Promise(r=>setImmediate(r));
-if(failure){
+if(failure==='permission'){
+ assert(!el('confirmProductImport').disabled);assert(!el('cancelProductImport').disabled);
+ assert(!el('importProgress').textContent.includes('结果未知'));
+ el('leaveProductImport').click();assert(!el('productImportDialog').open);
+}else if(failure){
  assert(el('importProgress').textContent.includes('结果未知'));assert(el('confirmProductImport').disabled);
  assert(!el('confirmProductImport').textContent.includes('正在'));
  assert(el('cancelProductImport').disabled);assert(!el('leaveProductImport').hidden);
  assert(el('continueImportSetup').hidden);
+ el('productImportDialog').cancel({preventDefault(){}});assert(!el('productImportDialog').open);
 }else{
  assert(el('importProgress').textContent.includes('正式导入成功'));assert(el('importProgress').textContent.includes('8字'));
  assert(!el('continueImportSetup').hidden);assert(el('confirmProductImport').disabled);
  el('continueImportSetup').click();assert.equal(opened,'35-demo');assert(el('editNotice').textContent.includes('第2步'));
 }
 assert(calls.every(c=>c[0].startsWith('/api/product-imports')));
+assert(calls.every(c=>c[1]!=='DELETE'));
 }
-(async()=>{await scenario(false);await scenario(true)})().catch(e=>{console.error(e);process.exitCode=1});
+(async()=>{await scenario(false);await scenario(true);await scenario('permission')})().catch(e=>{console.error(e);process.exitCode=1});
 """
     result = subprocess.run(['node', '-e', script], cwd=ROOT, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

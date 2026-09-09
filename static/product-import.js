@@ -14,7 +14,11 @@
       body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     });
     const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || '导入未完成');
+    if (!response.ok) {
+      const error = new Error(data.detail || '导入未完成');
+      error.notApplied = data.code === 'IMPORT_STORAGE_NOT_READY' && data.import_state === 'not_applied';
+      throw error;
+    }
     return data;
   }
   function controls(value) {
@@ -28,14 +32,16 @@
     node('importProductDir').readOnly = value || !!token || !!listing?.matched_product_dir_name;
     node('confirmProductImport').disabled = value || committed || uncertain || !preview?.preview_id || !node('acceptProductImport').checked;
     node('productImportForm').setAttribute('aria-busy', String(value));
+    node('closeProductImport').disabled = node('leaveProductImport').disabled = false;
+    node('importCloseHint').textContent = value ? '可以关闭窗口；正在进行的操作不会因此取消，请勿重复上传。' : '关闭只隐藏窗口并保留上传记录，不会发送资料或自动核验。';
   }
   async function work(fn) {
     if (busy) return;
     controls(true); node('importError').textContent = '';
     try { await fn(); }
     catch (error) {
+      if (error.notApplied) uncertain = false;
       node('importError').textContent = error.message || '连接失败，结果未确认；不要重复执行，请先检查';
-      node('leaveProductImport').hidden = !token;
       node('importProgress').textContent = committed ? '导入已成功，但最新商品状态读取失败。请关闭后重新打开资料配置查看；不要重复导入。' : uncertain ? '确认结果未知，请保留现场检查，不要重复提交或重新导入。' : '本步骤未完成，原商品尚未确认替换。请查看下方错误。';
       node('confirmProductImport').textContent = committed ? '已完成导入' : uncertain ? '导入未确认，请检查错误' : '确认导入（不核验、不开放发货）';
     }
@@ -60,7 +66,9 @@
   }
   document.addEventListener('click', event => {
     const button = event.target.closest('.import-product-button');
-    if (!button || busy || state.editSavePending || state.shareConfirmPending) return;
+    if (!button) return;
+    if (busy) { node('productImportDialog').showModal(); return; }
+    if (state.editSavePending || state.shareConfirmPending) return;
     if (button.id === 'editImportProduct' && Object.keys(editedFields()).length) {
       node('formError').textContent = '有未保存的修改，请先保存网盘信息或维护设置，再导入商品包。';
       return;
@@ -77,11 +85,11 @@
     node('importError').textContent = node('importProgress').textContent = '';
     node('importPreview').hidden = true;
     node('importUploadFields').hidden = false;
-    node('leaveProductImport').hidden = true;
+    node('leaveProductImport').hidden = false;
     node('continueImportSetup').hidden = true;
     node('importUploadProgress').hidden = true;
     node('importUploadProgress').value = 0;
-    node('cancelProductImport').textContent = returnDir ? '返回交付准备' : '取消 / 关闭';
+    node('cancelProductImport').textContent = '放弃本次上传并清理暂存';
     node('confirmProductImport').textContent = '确认导入（不核验、不开放发货）';
     controls(false); node('productImportDialog').showModal();
   });
@@ -148,7 +156,12 @@
       if(returnDir) openEdit(returnDir);
     });
   }
+  function leaveImport() {
+    node('productImportDialog').close();
+    if (busy && typeof showActionNotice === 'function') showActionNotice('窗口已关闭，当前上传或保存仍在进行；请勿重复上传。点击导入可查看进度。');
+  }
   node('cancelProductImport').addEventListener('click',closeImport);
-  node('leaveProductImport').addEventListener('click',()=>{if(!busy)node('productImportDialog').close();});
-  node('productImportDialog').addEventListener('cancel',event=>{event.preventDefault();if(!busy && !uncertain)closeImport();});
+  node('closeProductImport').addEventListener('click',leaveImport);
+  node('leaveProductImport').addEventListener('click',leaveImport);
+  node('productImportDialog').addEventListener('cancel',event=>{event.preventDefault();leaveImport();});
 })();

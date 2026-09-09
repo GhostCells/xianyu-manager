@@ -220,9 +220,40 @@ def test_existing_unwritable_directory_rejected_before_mutation(intake,monkeypat
     t=uploaded(intake);p=imp.preview(a,t,None)
     before=imp.db.get_product('45-demo')
     monkeypatch.setattr('xianyu_manager.product_import.os.access',lambda *args:False)
-    with pytest.raises(ValueError,match='旧商品目录不可写'):imp.confirm(a,t,p['preview_id'],True)
+    with pytest.raises(ValueError,match='存储尚未就绪'):imp.confirm(a,t,p['preview_id'],True)
     assert imp.db.get_product('45-demo')==before
     assert json.loads((imp.root/t/'job.json').read_text())['phase']=='preview'
+
+
+def test_storage_failure_before_upload_creates_no_job(intake,monkeypatch):
+    imp,a=intake
+    monkeypatch.setattr('xianyu_manager.product_import.os.access',lambda *args:False)
+    with pytest.raises(ValueError,match='存储不可写'):uploaded(intake)
+    assert not list(imp.root.glob('*/job.json'))
+    assert not list(imp.root.rglob('*.blob'))
+
+
+def test_own_directory_permission_repaired_without_touching_contents(intake):
+    imp,a=intake;t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)
+    target=imp.settings.product_library/'45-demo'
+    before=(target/'delivery.zip').read_bytes();old_mode=(target/'delivery.zip').stat().st_mode
+    target.chmod(0o500)
+    try:
+        t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)
+        assert (imp.root/t/'previous-product'/'delivery.zip').read_bytes()==before
+        assert (imp.root/t/'previous-product'/'delivery.zip').stat().st_mode==old_mode
+    finally:
+        if target.exists():target.chmod(0o700)
+
+
+def test_foreign_owner_is_not_chmodded_by_web_process(intake,monkeypatch):
+    imp,a=intake;t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)
+    import os
+    own_uid=os.getuid()
+    monkeypatch.setattr(os,'getuid',lambda:own_uid+100)
+    monkeypatch.setattr(os,'access',lambda *args:False)
+    monkeypatch.setattr(os,'fchmod',lambda *args:pytest.fail('cannot chmod another owner'))
+    with pytest.raises(ValueError,match='存储尚未就绪'):uploaded(intake)
 
 
 def test_explicit_confirmation_required(intake):
