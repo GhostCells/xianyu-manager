@@ -55,6 +55,7 @@ assert(el('confirmProductImport').disabled);assert(el('importProgress').textCont
 release();await new Promise(r=>setImmediate(r));
 if(failure){
  assert(el('importProgress').textContent.includes('结果未知'));assert(el('confirmProductImport').disabled);
+ assert(!el('confirmProductImport').textContent.includes('正在'));
  assert(el('cancelProductImport').disabled);assert(!el('leaveProductImport').hidden);
  assert(el('continueImportSetup').hidden);
 }else{

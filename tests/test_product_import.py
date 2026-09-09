@@ -60,7 +60,9 @@ def test_preview_then_confirm_no_auto_verification(intake):
     result = imp.confirm(a,token,r['preview_id'],True)
     assert result['committed'] and not result['verified']
     p = imp.db.get_product('45-demo')
-    assert p['zip_name']=='delivery.zip' and p['quality_status']=='passed'
+    assert p['zip_name']=='delivery.zip' and p['quality_status']=='unknown'
+    from xianyu_manager.fulfillment_rules import delivery_issues
+    assert 'QUALITY_BLOCKED' in delivery_issues(p)
     assert not p['share_verified'] and p['share_needs_review'] and not p['verified_fingerprint']
     assert imp.db.get_product_by_listing_item_id('123456789',a)['dir_name']=='45-demo'
     assert len(list((imp.settings.product_library/'45-demo').rglob('*.zip')))==1
@@ -91,6 +93,8 @@ def test_update_preserves_share_mapping_and_old_files(intake):
     imp,a=intake
     t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)
     imp.db.update_product('45-demo',{'share_url':'https://pan.baidu.com/s/synthetic','share_code':'test'})
+    # Simulate a separate historical quality approval; import must revoke it.
+    with imp.db.connect() as c:c.execute("UPDATE products SET quality_status='passed' WHERE dir_name='45-demo'")
     p=imp.db.get_product('45-demo');imp.db.confirm_product_share('45-demo',p['fulfillment_fingerprint'])
     with imp.db.connect() as c:before=[tuple(r) for r in c.execute('SELECT * FROM account_products')]
     t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)
@@ -190,9 +194,35 @@ def test_quality_not_forged_and_cancel(intake):
     imp,a=intake
     imp.settings.validator_path.write_text("def validate_product(path, number, errors):\n    errors.append('synthetic quality failure')\n")
     t=uploaded(intake,{'45-demo/验收报告.txt':'全部通过'.encode()});p=imp.preview(a,t,None)
-    assert p['quality_status']=='failed'
+    assert p['quality_status']=='unknown'
+    assert p['quality_errors']==[]
+    assert p['validation_scope']=='upload_safety_only'
     assert imp.db.get_product('45-demo') is None
     imp.cancel(a,t);assert not (imp.root/t).exists()
+
+
+@pytest.mark.parametrize('image_count', [0, 4, 7])
+def test_upload_ignores_publishing_rules_and_never_loads_validator(intake,image_count):
+    imp,a=intake
+    imp.settings.validator_path.write_text("raise AssertionError('validator must not execute during intake')")
+    extra={f'45-demo/商品资料/商品图片/arbitrary-{i}.png':b'opaque upload' for i in range(image_count)}
+    t=uploaded(intake,extra);p=imp.preview(a,t,None)
+    assert p['quality_status']=='unknown' and p['quality_errors']==[]
+    result=imp.confirm(a,t,p['preview_id'],True)
+    assert result['committed'] and result['quality_status']=='unknown'
+    product=imp.db.get_product('45-demo')
+    assert product['knowledge_chars']>0 and product['image_count']==image_count
+    assert not product['share_verified'] and not product['verified_fingerprint']
+
+
+def test_existing_unwritable_directory_rejected_before_mutation(intake,monkeypatch):
+    imp,a=intake;t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)
+    t=uploaded(intake);p=imp.preview(a,t,None)
+    before=imp.db.get_product('45-demo')
+    monkeypatch.setattr('xianyu_manager.product_import.os.access',lambda *args:False)
+    with pytest.raises(ValueError,match='旧商品目录不可写'):imp.confirm(a,t,p['preview_id'],True)
+    assert imp.db.get_product('45-demo')==before
+    assert json.loads((imp.root/t/'job.json').read_text())['phase']=='preview'
 
 
 def test_explicit_confirmation_required(intake):
@@ -213,4 +243,5 @@ def test_replace_failure_stays_unverified(intake,monkeypatch):
     product=imp.db.get_product('45-demo')
     assert not product['share_verified'] and product['quality_status']=='unknown'
     assert json.loads((imp.root/t/'job.json').read_text())['phase']=='needs_manual_recovery'
+    assert json.loads((imp.root/t/'job.json').read_text())['failure']=={'type':'OSError','errno':None}
     assert (imp.root/t/'previous-product').is_dir()

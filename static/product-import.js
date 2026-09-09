@@ -37,6 +37,7 @@
       node('importError').textContent = error.message || '连接失败，结果未确认；不要重复执行，请先检查';
       node('leaveProductImport').hidden = !token;
       node('importProgress').textContent = committed ? '导入已成功，但最新商品状态读取失败。请关闭后重新打开资料配置查看；不要重复导入。' : uncertain ? '确认结果未知，请保留现场检查，不要重复提交或重新导入。' : '本步骤未完成，原商品尚未确认替换。请查看下方错误。';
+      node('confirmProductImport').textContent = committed ? '已完成导入' : uncertain ? '导入未确认，请检查错误' : '确认导入（不核验、不开放发货）';
     }
     finally { controls(false); }
   }
@@ -51,7 +52,7 @@
       if (match) node('importZipSelection').value = match.index;
     }
     node('importPreviewText').textContent = result.requires_zip_selection ? result.message :
-      `闲鱼：${result.title}\nID：${result.item_id}\n本地：${result.product}\n${result.existing ? '更新已有Product，旧版本会备份' : '建立新的独立Product'}\n交付：${result.zip_name}\nhash：${result.zip_hash.slice(0,12)}\n知识：${result.knowledge_chars}字\n来源：${result.knowledge_sources.join('、')}\n质量：${result.quality_status}\n${result.quality_errors.join('\n')}\n${result.knowledge_warnings.join('\n')}\n${result.notice}`;
+      `闲鱼：${result.title}\nID：${result.item_id}\n本地：${result.product}\n${result.existing ? '更新已有Product，旧版本会备份' : '建立新的独立Product'}\n交付：${result.zip_name}\n版本：${result.zip_hash.slice(0,12)}\n知识：${result.knowledge_chars}字\n来源：${result.knowledge_sources.join('、')}\n仅检查文件安全与完整性，不执行商品质量评估；上传不代表发货资格通过。\n${result.knowledge_warnings.join('\n')}\n${result.notice}`;
     node('importKnowledge').textContent = (result.knowledge_preview || '') + (result.knowledge_truncated ? '\n（预览已截断，后台保存完整提取结果）' : '');
     node('importProgress').textContent = result.requires_zip_selection
       ? '上传完成，尚未导入。请选择要交付的ZIP，再生成预览。'

@@ -1,7 +1,7 @@
 """Bounded folder intake. No external IO, ZIP extraction, or delivery calls.
 
 Uploads are private numbered blobs, never executable paths. Confirmation is a
-separate operation; the existing trusted scanner decides quality. Old assets
+separate operation; intake records metadata, not product quality. Old assets
 and raw uploads remain outside the scanned product library.
 """
 import hashlib
@@ -14,10 +14,11 @@ import threading
 import time
 import uuid
 import zipfile
+from datetime import datetime, timezone
 
 from .fulfillment_rules import parse_listing_id
 from .knowledge import load_knowledge_folder, TEXT_EXTENSIONS
-from .scanner import load_validator, scan_product, sha256_file
+from .scanner import ScannedProduct, sha256_file
 
 MAX_FILES = 20000
 MAX_TOTAL = 1024**3
@@ -55,6 +56,22 @@ def tree_hash(path):
         if item.is_file():
             entries.append((str(item.relative_to(path)), sha256_file(item)))
     return digest(entries)
+
+
+def import_metadata(candidate, zip_name):
+    """Register uploaded assets without invoking the publishing/quality validator.
+
+    Archive safety is checked during preview and its bytes are bound by tree_hash.
+    Unknown is deliberate: upload is neither quality approval nor share verification.
+    """
+    package = candidate / zip_name
+    images = candidate / '图片'
+    return ScannedProduct(
+        dir_name=candidate.name, number=int(candidate.name[:2]), name=candidate.name[3:],
+        title='', zip_name=zip_name, zip_hash=sha256_file(package), zip_size=package.stat().st_size,
+        image_count=sum(p.is_file() for p in images.iterdir()) if images.is_dir() else 0,
+        quality_status='unknown', quality_errors=[], scanned_at=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 class ProductImport:
@@ -246,15 +263,15 @@ class ProductImport:
             zip_name = PurePosixPath(job['files'][zip_index]['path']).name
             shutil.copyfile(package, candidate / zip_name)
             (candidate / '发布文案.txt').write_text(knowledge.text, encoding='utf-8')
-            # Never load an uploaded validator or trust 验收报告.txt as a pass.
-            scanned = scan_product(candidate, int(job['name'][:2]), load_validator(self.settings.validator_path))
-            job.update(phase='preview', zip_index=zip_index, candidate_hash=tree_hash(candidate), preview_id=uuid.uuid4().hex)
+            # Neither uploaded reports nor the old publishing validator approve quality.
+            scanned = import_metadata(candidate, zip_name)
+            job.update(phase='preview', zip_index=zip_index, candidate_hash=tree_hash(candidate), preview_id=uuid.uuid4().hex, validation_scope='upload_safety_only')
             self._save(directory, job)
             return {'preview_id': job['preview_id'], 'item_id': job['item_id'], 'title': job['title'], 'product': job['name'], 'existing': job['existing'], 'packages': packages,
                     'zip_name': zip_name, 'zip_hash': scanned.zip_hash, 'zip_size': scanned.zip_size,
                     'knowledge_sources': source_names, 'knowledge_chars': knowledge.chars,
                     'knowledge_preview': knowledge.text[:1600], 'knowledge_truncated': knowledge.chars > 1600,
-                    'knowledge_warnings': list(knowledge.warnings), 'quality_status': scanned.quality_status,
+                    'knowledge_warnings': list(knowledge.warnings), 'quality_status': scanned.quality_status, 'validation_scope':'upload_safety_only',
                     'quality_errors': scanned.quality_errors, 'can_confirm': True,
                     'notice': '确认会替换运营资料、保留旧版本并撤销当前核验；不会修改分享、开启发货或修改允许范围'}
 
@@ -271,7 +288,12 @@ class ProductImport:
                 raise ValueError('文件版本已变化，请重新导入预览')
             if self.root.stat().st_dev != self.settings.product_library.stat().st_dev:
                 raise ValueError('归档和商品库需位于同一文件系统，暂不支持跨盘替换')
-            scanned = scan_product(candidate, int(job['name'][:2]), load_validator(self.settings.validator_path))
+            # A cross-directory rename needs write access to the directory itself
+            # (its '..' entry changes). Check before persisting any applying marker.
+            if target.exists() and not os.access(target, os.W_OK):
+                raise ValueError('旧商品目录不可写，尚未替换资料；请管理员修复该目录权限后重试')
+            zip_name = PurePosixPath(job['files'][job['zip_index']]['path']).name
+            scanned = import_metadata(candidate, zip_name)
             knowledge = load_knowledge_folder(candidate / '商品资料')
             with self.db.connect() as c:
                 c.execute('BEGIN IMMEDIATE')
@@ -314,8 +336,10 @@ class ProductImport:
                     self.db._log(c, 'product_import_confirmed', job['name'], {'import_id':token,'account_id':account_id,'item_id':job['item_id'],'zip_hash':scanned.zip_hash})
                 job['phase'] = 'committed'
                 self._save(directory, job)
-            except Exception:
+            except Exception as exc:
                 job['phase'] = 'needs_manual_recovery'
+                # Safe diagnostics only: no paths, SQL values, share links or exception text.
+                job['failure'] = {'type':type(exc).__name__, 'errno':getattr(exc,'errno',None)}
                 self._save(directory, job)
                 raise ValueError('导入未完成，已保留原包和旧版本；该商品需人工检查，禁止自动核验') from None
             return {'product': job['name'], 'quality_status': scanned.quality_status, 'verified': False, 'import_id': token, 'committed': True}
