@@ -2126,7 +2126,8 @@ class Database:
                 status = json.loads(snapshots[0]['source_text'] or '{}').get('itemStatus')
             except (ValueError, AttributeError):
                 return None
-            if str(status) not in {'0', '0.0'}:
+            from .listing_status import sellable_status
+            if not sellable_status(account_id, item_id, status):
                 return None
         if any(
             not row["is_active"]

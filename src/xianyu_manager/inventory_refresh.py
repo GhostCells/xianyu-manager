@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 from .fulfillment_rules import parse_listing_id
+from .listing_status import sellable_status
 
 
 class InventoryObservation:
@@ -74,7 +75,7 @@ def store(connection, account_id, report):
             title=excluded.title,source_text=excluded.source_text,source_kind=excluded.source_kind,
             is_active=excluded.is_active,synced_at=excluded.synced_at''',
             (account_id,iid,item['title'],'https://www.goofish.com/item?id='+iid,
-             json.dumps({'itemStatus':item['item_status']}),matched,int(item['item_status']==0),report['observed_at']))
+             json.dumps({'itemStatus':item['item_status']}),matched,int(sellable_status(account_id,iid,item['item_status'])),report['observed_at']))
     saved = {**report, 'account_id':account_id, 'last_success_at':report['observed_at'], 'needs_refresh':False}
     connection.execute('INSERT INTO inventory_refresh_state VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET report=excluded.report',
                        (account_id,json.dumps(saved,ensure_ascii=False)))

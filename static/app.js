@@ -77,7 +77,9 @@ function renderLiveListings(listings) {
   return listings.map((listing) => {
     const product = state.products.find((item) => item.dir_name === listing.matched_product_dir_name);
     const mapped = Boolean(listing.matched_product_dir_name);
-    const sourceLabel = listing.source_kind === "platform_inventory" ? "上次刷新正常在售" : "历史登记·待刷新";
+    let platformStatus;
+    try { platformStatus = JSON.parse(listing.source_text || '{}').itemStatus; } catch (_) {}
+    const sourceLabel = listing.source_kind === "platform_inventory" ? (Number(platformStatus) === -9 ? "特殊状态·已单独兼容" : "上次刷新正常在售") : "历史登记·待刷新";
     const mappingBadge = product
       ? `<span class="badge ok">已映射 ${String(product.number).padStart(2, "0")}</span>`
       : mapped
