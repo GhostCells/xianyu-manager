@@ -447,7 +447,7 @@ def test_real_frontend_partial_save_and_confirmation_requests():
     script = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync('static/app.js','utf8');
-const elements={}; const el=id=>elements[id]||(elements[id]={value:'',checked:false,close(){},showModal(){}});
+const elements={}; const el=id=>elements[id]||(elements[id]={value:'',dataset:{},checked:false,close(){},showModal(){}});
 const requests=[];
 const context={el,state:{},Object,JSON,encodeURIComponent,
  inputToCents:v=>v===''?null:Math.round(Number(v)*100),
