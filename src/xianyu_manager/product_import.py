@@ -13,10 +13,10 @@ import shutil
 import threading
 import time
 import uuid
-import zipfile
 from datetime import datetime, timezone
 
-from .fulfillment_rules import parse_listing_id
+from .fulfillment_rules import parse_listing_id, package_safety_fingerprint
+from .delivery_package import check_zip, check_registered_package
 from .knowledge import load_knowledge_folder, TEXT_EXTENSIONS
 from .scanner import ScannedProduct, sha256_file
 
@@ -219,22 +219,7 @@ class ProductImport:
             if zip_index not in {p['index'] for p in packages}:
                 raise ValueError('只能选择客户交付目录中的ZIP')
             package = directory / f'{zip_index}.blob'
-            try:
-                with zipfile.ZipFile(package) as z:
-                    entries = z.infolist()
-                    if not entries or len(entries) > 10000 or sum(e.file_size for e in entries) > 1024**3:
-                        raise ValueError('ZIP内容为空或超过安全检查上限')
-                    for e in entries:
-                        # No extraction; still reject unsafe, encrypted or explosive archives.
-                        path = PurePosixPath(e.filename)
-                        if path.is_absolute() or '..' in path.parts or '\\' in e.filename or ':' in e.filename or e.flag_bits & 1 or (e.external_attr >> 16) & 0o170000 == 0o120000:
-                            raise ValueError('ZIP含不安全路径、符号链接或加密文件')
-                        if e.file_size > max(e.compress_size, 1) * 200:
-                            raise ValueError('ZIP压缩比例超过安全上限')
-                    if z.testzip() is not None:
-                        raise ValueError('ZIP完整性检查失败')
-            except (zipfile.BadZipFile, NotImplementedError, RuntimeError):
-                raise ValueError('ZIP无法安全读取') from None
+            check_zip(package)
             # Private candidates never appear under the scanned production library.
             candidate = directory / 'candidate' / job['name']
             if candidate.exists():
@@ -308,7 +293,7 @@ class ProductImport:
                 before_file.chmod(0o600)
                 # Persist a fail-closed marker BEFORE filesystem replacement.
                 if product:
-                    c.execute("UPDATE products SET share_verified=0,share_needs_review=1,verified_fingerprint='',quality_status='unknown' WHERE dir_name=?", (job['name'],))
+                    c.execute("UPDATE products SET share_verified=0,share_needs_review=1,verified_fingerprint='',delivery_safety_fingerprint='',quality_status='unknown' WHERE dir_name=?", (job['name'],))
                 expected = digest(self._target(c, account_id, job['item_id'], job['name']))
             job['phase'] = 'applying'
             self._save(directory, job)
@@ -325,9 +310,9 @@ class ProductImport:
                               (job['name'], scanned.number, scanned.name, job['title'], scanned.scanned_at))
                     c.execute('''UPDATE products SET zip_name=?,zip_hash=?,zip_size=?,image_count=?,quality_status=?,quality_errors_json=?,scanned_at=?,
                         knowledge_text=?,knowledge_hash=?,knowledge_chars=?,knowledge_source_path=?,knowledge_file_count=?,knowledge_updated_at=CURRENT_TIMESTAMP,
-                        share_verified=0,share_needs_review=1,verified_fingerprint='',updated_at=CURRENT_TIMESTAMP WHERE dir_name=?''',
+                        share_verified=0,share_needs_review=1,verified_fingerprint='',delivery_safety_fingerprint=?,updated_at=CURRENT_TIMESTAMP WHERE dir_name=?''',
                               (scanned.zip_name,scanned.zip_hash,scanned.zip_size,scanned.image_count,scanned.quality_status,json.dumps(scanned.quality_errors,ensure_ascii=False),scanned.scanned_at,
-                               knowledge.text,knowledge.content_hash,knowledge.chars,str(target/'商品资料'),knowledge.file_count,job['name']))
+                               knowledge.text,knowledge.content_hash,knowledge.chars,str(target/'商品资料'),knowledge.file_count,package_safety_fingerprint(scanned.to_dict()),job['name']))
                     # Explicitly selected listing only; never fuzzy-match or touch other mappings.
                     if not configured:
                         c.execute('''INSERT INTO account_products(account_id,product_dir_name,enabled,listing_url,listing_status) VALUES(?,?,1,?,'published')''',
@@ -343,6 +328,41 @@ class ProductImport:
                 self._save(directory, job)
                 raise ValueError('导入未完成，已保留原包和旧版本；该商品需人工检查，禁止自动核验') from None
             return {'product': job['name'], 'quality_status': scanned.quality_status, 'verified': False, 'import_id': token, 'committed': True}
+
+    def renew_committed_package_safety(self, account_id, token):
+        """Explicit maintenance for pre-receipt imports. No share verification.
+
+        Only a fully committed, unchanged import can acquire the safety receipt.
+        No scan, mapping update, import replay, order processing or auto approval.
+        """
+        if self.db.safe_mode or self.db.prepare_mode:
+            raise ValueError('SAFE_MODE_OPERATION_BLOCKED')
+        if self.db.runtime_account_id is not None and self.db.runtime_account_id != account_id:
+            raise ValueError('IMPORT_ACCOUNT_MISMATCH')
+        with self.lock:
+            directory, job = self._job(account_id, token, allow_expired=True)
+            if job['phase'] != 'committed':
+                raise ValueError('IMPORT_NOT_COMMITTED')
+            target = self.settings.product_library / job['name']
+            if tree_hash(target) != job['candidate_hash']:
+                raise ValueError('IMPORTED_ASSETS_CHANGED')
+            with self.db.connect() as c:
+                c.execute('BEGIN IMMEDIATE')
+                _, product, _ = self._target(c, account_id, job['item_id'], job['name'])
+                if not product:
+                    raise ValueError('PRODUCT_NOT_FOUND')
+                self.db._require_no_pending_delivery(c, job['name'])
+                selected = job['files'][job['zip_index']]
+                blob = directory / f"{job['zip_index']}.blob"
+                if (PurePosixPath(selected['path']).parts[0] != '客户交付'
+                        or PurePosixPath(selected['path']).name != product['zip_name']
+                        or selected['size'] != product['zip_size']
+                        or sha256_file(blob) != product['zip_hash']):
+                    raise ValueError('IMPORTED_PACKAGE_MISMATCH')
+                receipt = check_registered_package(self.settings.product_library, product)
+                c.execute('UPDATE products SET delivery_safety_fingerprint=? WHERE dir_name=?', (receipt, job['name']))
+                self.db._log(c, 'import_package_safety_checked', job['name'], {'import_id':token, 'account_id':account_id, 'zip_hash':product['zip_hash']})
+            return {'product':job['name'], 'safety_checked':True, 'share_verification_changed':False}
 
     def cancel(self, account_id, token):
         with self.lock:

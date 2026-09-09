@@ -695,8 +695,9 @@ function renderShareVerification(product, changed = false) {
   const issues = product.delivery_issues || ['VERIFICATION_VERSION_UNCONFIRMED'];
   const packageMissing = issues.includes('DELIVERY_PACKAGE_UNCONFIRMED');
   const qualityBlocked = issues.includes('QUALITY_BLOCKED');
+  const safetyBlocked = issues.includes('DELIVERY_PACKAGE_SAFETY_UNCONFIRMED') || issues.includes('DELIVERY_PACKAGE_VERSION_CHANGED');
   el('deliveryPackageStatus').textContent = product.zip_name && product.zip_hash
-    ? `已登记：${product.zip_name} · 版本 ${product.zip_hash.slice(0,12)}${qualityBlocked ? ' · 质量检查未通过，请查看阻断原因' : ''}`
+    ? `已登记：${product.zip_name} · 版本 ${product.zip_hash.slice(0,12)}${safetyBlocked ? ' · ZIP安全记录失效，请重新导入' : qualityBlocked ? ' · 旧资料未确认，请导入商品包' : product.delivery_safety_fingerprint ? ' · ZIP安全检查通过' : ''}`
     : '尚未登记交付ZIP，请先导入商品包；已有知识不代表交付包已就绪。';
   el('shareSaveStatus').textContent = changed ? '有未保存的修改，请先保存网盘信息。'
     : product.share_url ? '当前网盘信息已保存。' : '尚未保存网盘链接。';
@@ -705,10 +706,11 @@ function renderShareVerification(product, changed = false) {
   status.textContent = changed ? '⚠ 交付资料已变化，需要重新核验；请先完成第2步保存。' : verified
     ? `✓ 当前交付版本已人工核验 · 时间：${product.share_verified_at || '未记录'} · 核验摘要：${product.verified_fingerprint.slice(0,12)} · ZIP：${(product.zip_hash || '').slice(0,12)}`
     : packageMissing ? '⚠ 尚未登记交付ZIP，请先完成第1步导入。'
-    : qualityBlocked ? '⚠ 交付包质量检查未通过，请先处理具体阻断原因。'
+    : safetyBlocked ? '⚠ 交付ZIP或版本已变化，请重新导入后核验。'
+    : qualityBlocked ? '⚠ 旧资料尚未确认交付安全，请通过第1步导入商品包。无需补齐发布图片。'
     : !product.share_url ? '⚠ 请先完成第2步，保存网盘信息。'
     : '⚠ 当前交付版本待人工核验。请本人打开网盘核对后确认。';
-  el('confirmShare').disabled = Boolean(state.shareConfirmPending || state.editSavePending || verified || changed || packageMissing || qualityBlocked || !product.share_url);
+  el('confirmShare').disabled = Boolean(state.shareConfirmPending || state.editSavePending || verified || changed || packageMissing || qualityBlocked || safetyBlocked || issues.includes('SHARE_SYNTAX_INVALID') || issues.includes('OPERATOR_REPORTED_UNUSABLE') || !product.share_url);
   el('confirmShare').textContent = verified ? '当前版本已核验' : '我已人工核验当前交付资料';
 }
 
@@ -756,7 +758,9 @@ async function updateKnowledgeFolder(mode, button) {
 function shareErrorMessage(detail) {
   const messages = {
     DELIVERY_PACKAGE_UNCONFIRMED: '交付包尚未确认，请先补齐当前交付 ZIP 和版本记录；仅保存链接不能完成核验',
-    QUALITY_BLOCKED: '商品质量检查尚未通过，需先处理交付资料问题',
+    QUALITY_BLOCKED: '旧资料质量检查尚未通过且没有当前ZIP安全记录，请导入商品包；无需补齐发布图片',
+    DELIVERY_PACKAGE_SAFETY_UNCONFIRMED: '当前ZIP安全记录缺失或已失效，请重新导入商品包',
+    DELIVERY_PACKAGE_VERSION_CHANGED: '服务器ZIP与登记版本不一致，请重新导入后核验',
     SHARE_UNVERIFIED: '分享资料尚未人工核验',
     SHARE_NEEDS_REVIEW: '分享资料需要重新核对',
     VERIFICATION_VERSION_UNCONFIRMED: '当前交付版本尚未人工核验',

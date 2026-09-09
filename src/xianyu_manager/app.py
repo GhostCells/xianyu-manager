@@ -1231,7 +1231,14 @@ class ShareConfirmation(BaseModel):
 @app.post("/api/products/{dir_name}/verify-share")
 def verify_share(dir_name: str, payload: ShareConfirmation) -> dict[str, object]:
     try:
-        database.confirm_product_share(Path(unquote(dir_name)).name, payload.fingerprint)
+        name = Path(unquote(dir_name)).name
+        product = database.get_product(name)
+        if product and product.get('delivery_safety_fingerprint'):
+            from .delivery_package import check_registered_package
+            receipt = check_registered_package(settings.product_library, product)
+            if receipt != product['delivery_safety_fingerprint']:
+                raise ValueError('DELIVERY_PACKAGE_SAFETY_UNCONFIRMED')
+        database.confirm_product_share(name, payload.fingerprint)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, "verification_method": "user_confirmation", "online_checked": False}

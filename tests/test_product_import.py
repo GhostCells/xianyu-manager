@@ -62,7 +62,8 @@ def test_preview_then_confirm_no_auto_verification(intake):
     p = imp.db.get_product('45-demo')
     assert p['zip_name']=='delivery.zip' and p['quality_status']=='unknown'
     from xianyu_manager.fulfillment_rules import delivery_issues
-    assert 'QUALITY_BLOCKED' in delivery_issues(p)
+    assert 'QUALITY_BLOCKED' not in delivery_issues(p)
+    assert p['delivery_safety_fingerprint']
     assert not p['share_verified'] and p['share_needs_review'] and not p['verified_fingerprint']
     assert imp.db.get_product_by_listing_item_id('123456789',a)['dir_name']=='45-demo'
     assert len(list((imp.settings.product_library/'45-demo').rglob('*.zip')))==1
@@ -93,8 +94,7 @@ def test_update_preserves_share_mapping_and_old_files(intake):
     imp,a=intake
     t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)
     imp.db.update_product('45-demo',{'share_url':'https://pan.baidu.com/s/synthetic','share_code':'test'})
-    # Simulate a separate historical quality approval; import must revoke it.
-    with imp.db.connect() as c:c.execute("UPDATE products SET quality_status='passed' WHERE dir_name='45-demo'")
+    # Safety approval is separate from quality, and still requires a human share confirmation.
     p=imp.db.get_product('45-demo');imp.db.confirm_product_share('45-demo',p['fulfillment_fingerprint'])
     with imp.db.connect() as c:before=[tuple(r) for r in c.execute('SELECT * FROM account_products')]
     t=uploaded(intake);p=imp.preview(a,t,None);imp.confirm(a,t,p['preview_id'],True)

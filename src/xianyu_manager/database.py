@@ -499,6 +499,7 @@ class Database:
             for table, name, declaration in (
                 ("products", "verified_fingerprint", "TEXT NOT NULL DEFAULT ''"),
                 ("products", "share_verified_at", "TEXT"),
+                ("products", "delivery_safety_fingerprint", "TEXT NOT NULL DEFAULT ''"),
                 ("orders", "fulfillment_fingerprint", "TEXT NOT NULL DEFAULT ''"),
                 ("orders", "fulfillment_text_hash", "TEXT NOT NULL DEFAULT ''"),
                 ("orders", "manual_delivery_state", "TEXT NOT NULL DEFAULT ''"),
@@ -1973,7 +1974,7 @@ class Database:
                     p.dir_name, p.number, p.name, p.title, p.knowledge_text,
                     p.knowledge_hash, p.knowledge_chars, p.knowledge_source_path,
                     p.knowledge_file_count, p.knowledge_updated_at, p.zip_name, p.zip_hash,
-                    p.verified_fingerprint, p.share_verified_at,
+                    p.verified_fingerprint, p.share_verified_at, p.delivery_safety_fingerprint,
                     p.zip_size, p.image_count, p.quality_status, p.quality_errors_json,
                     p.scanned_at, p.share_url, p.share_code, p.share_verified,
                     p.share_needs_review, p.catalog_status, p.updated_at,
@@ -2736,7 +2737,7 @@ class Database:
                     l.is_active, l.synced_at,
                     p.name AS product_name, p.share_url, p.share_code,
                     p.share_verified, p.share_needs_review, p.quality_status,
-                    p.zip_name,p.zip_hash,p.zip_size,p.quality_errors_json,p.verified_fingerprint,
+                    p.zip_name,p.zip_hash,p.zip_size,p.quality_errors_json,p.verified_fingerprint,p.delivery_safety_fingerprint,
                     p.knowledge_hash, p.knowledge_chars
                 FROM account_listings l
                 LEFT JOIN products p ON p.dir_name = l.matched_product_dir_name

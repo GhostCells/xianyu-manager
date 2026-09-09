@@ -50,6 +50,15 @@ assert(el('editNotice').textContent.includes('维护设置仍有未保存'));
 ctx.renderShareVerification({...p,delivery_issues:['DELIVERY_PACKAGE_UNCONFIRMED','QUALITY_BLOCKED','SHARE_UNVERIFIED']});
 assert(el('shareVerificationStatus').textContent.includes('第1步'));assert(!el('shareVerificationStatus').textContent.includes('质量'));
 assert(el('confirmShare').disabled);assert(el('verificationDetailText').textContent.includes('质量'));
+// An imported safe ZIP may be verified even when publishing quality is unknown/failed.
+const imported={...p,share_verified:false,verified_fingerprint:'',share_needs_review:true,quality_status:'failed',
+zip_name:'customer.zip',delivery_safety_fingerprint:'c'.repeat(64),delivery_issues:['SHARE_UNVERIFIED','SHARE_NEEDS_REVIEW','VERIFICATION_VERSION_UNCONFIRMED']};
+ctx.renderShareVerification(imported);assert(!el('confirmShare').disabled);
+assert(el('deliveryPackageStatus').textContent.includes('ZIP安全检查通过'));
+assert(!el('shareVerificationStatus').textContent.includes('质量'));
+ctx.renderShareVerification({...imported,delivery_issues:['DELIVERY_PACKAGE_SAFETY_UNCONFIRMED']});
+assert(el('confirmShare').disabled);assert(el('shareVerificationStatus').textContent.includes('版本已变化'));
+ctx.renderShareVerification({...imported,delivery_issues:['SHARE_SYNTAX_INVALID']});assert(el('confirmShare').disabled);
 })().catch(e=>{console.error(e);process.exitCode=1});
 """
     result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)

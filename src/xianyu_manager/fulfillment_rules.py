@@ -31,6 +31,14 @@ def fulfillment_fingerprint(product: dict[str, object]) -> str:
     ).hexdigest()
 
 
+def package_safety_fingerprint(product: dict[str, object]) -> str:
+    """Version-bound ZIP safety receipt; never a share/user verification."""
+    return hashlib.sha256(json.dumps(
+        ['zip-safety-v1', product.get('zip_name'), product.get('zip_hash'), product.get('zip_size')],
+        ensure_ascii=False, separators=(',', ':'),
+    ).encode()).hexdigest()
+
+
 def delivery_issues(
     product: dict[str, object],
     *,
@@ -71,7 +79,11 @@ def delivery_issues(
             errors = json.loads(str(product.get("quality_errors_json", "null")))
         except ValueError:
             errors = None
-    if (
+    safety = product.get('delivery_safety_fingerprint')
+    if safety:
+        if safety != package_safety_fingerprint(product):
+            issues.append('DELIVERY_PACKAGE_SAFETY_UNCONFIRMED')
+    elif (
         product.get("quality_status") != "passed"
         or not isinstance(errors, list)
         or not all(isinstance(e, str) for e in errors)
