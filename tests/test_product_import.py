@@ -33,11 +33,11 @@ def intake(tmp_path):
     return importer, a
 
 
-def uploaded(intake, extra=None):
+def uploaded(intake, extra=None, *, item_id='123456789'):
     imp, a = intake
     data = {'45-demo/商品资料/说明.txt': '仅支持Mac。token=secret_value 隐私\nhttps://example.invalid'.encode(), '45-demo/客户交付/delivery.zip': zipped(), '45-demo/制作源文件/private.py': b'raise RuntimeError("never execute")'}
     data.update(extra or {})
-    job = imp.start(a,'123456789','45-demo',[{'path':k,'size':len(v)} for k,v in data.items()])
+    job = imp.start(a,item_id,'45-demo',[{'path':k,'size':len(v)} for k,v in data.items()])
     async def upload():
         for i, value in enumerate(data.values()):
             async def chunks():

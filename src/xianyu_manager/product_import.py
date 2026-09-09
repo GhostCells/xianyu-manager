@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timezone
 
 from .fulfillment_rules import parse_listing_id, package_safety_fingerprint
+from .listing_status import sellable_status
 from .delivery_package import check_zip, check_registered_package, tree_hash
 from .product_ownership import has_foreign_product_use
 from .knowledge import load_knowledge_folder, TEXT_EXTENSIONS, KnowledgeFolderResult
@@ -134,8 +135,12 @@ class ProductImport:
             raise ValueError('请选择当前账号正常在售商品')
         if parse_listing_id(listing['listing_url']) != item_id:
             raise ValueError('在售商品链接与完整ID不一致')
-        if listing['source_kind'] != 'platform_inventory' or json.loads(listing['source_text'] or '{}').get('itemStatus') != 0:
-            raise ValueError('请先刷新在售列表，仅接受正常状态商品')
+        try:
+            status = json.loads(listing['source_text'] or '{}').get('itemStatus')
+        except (ValueError, AttributeError):
+            status = None
+        if listing['source_kind'] != 'platform_inventory' or not sellable_status(account_id, item_id, status):
+            raise ValueError('请先刷新在售列表，仅接受正常在售或已单独兼容的特殊状态商品')
         matched = listing['matched_product_dir_name'] or ''
         if matched and matched != name:
             raise ValueError('已有精确映射必须保持，不可通过导入重新绑定')
