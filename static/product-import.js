@@ -52,16 +52,17 @@
     node('importUploadFields').hidden = true;
     node('importPreview').hidden = false;
     node('acceptProductImport').checked = false;
-    node('importZipSelection').replaceChildren(...result.packages.map(p => new Option(`${p.path} (${(p.size/1024/1024).toFixed(2)} MB)`, p.index)));
+    node('importZipSelection').replaceChildren(...result.packages.map(p => new Option(`${p.path} (${(p.size/1024/1024).toFixed(2)} MB)`, p.index)), new Option('网盘资料交付（无ZIP，适用于教程等）', 'cloud'));
+    if (result.delivery_kind === 'cloud' || !result.packages.length) node('importZipSelection').value = 'cloud';
     if (result.zip_name) {
       const match = result.packages.find(p => p.path.split('/').pop() === result.zip_name);
       if (match) node('importZipSelection').value = match.index;
     }
     node('importPreviewText').textContent = result.requires_zip_selection ? result.message :
-      `闲鱼：${result.title}\nID：${result.item_id}\n本地：${result.product}\n${result.existing ? '更新已有Product，旧版本会备份' : '建立新的独立Product'}\n交付：${result.zip_name}\n版本：${result.zip_hash.slice(0,12)}\n知识：${result.knowledge_chars}字\n来源：${result.knowledge_sources.join('、')}\n仅检查文件安全与完整性，不执行商品质量评估；上传不代表发货资格通过。\n${result.knowledge_warnings.join('\n')}\n${result.notice}`;
+      `闲鱼：${result.title}\nID：${result.item_id}\n本地：${result.product}\n${result.existing ? '更新已有Product，旧版本会备份' : '建立新的独立Product'}\n交付：${result.delivery_kind === 'cloud' ? '网盘资料（无ZIP），网盘实际内容由本人核验' : result.zip_name}\n${result.delivery_kind === 'cloud' ? '本地资料版本（不是网盘文件hash）' : '版本'}：${(result.delivery_revision || result.zip_hash).slice(0,12)}\n知识：${result.knowledge_chars}字\n来源：${result.knowledge_sources.join('、')}\n仅检查文件安全与完整性，不执行商品质量评估；上传不代表发货资格通过。\n${result.knowledge_warnings.join('\n')}\n${result.notice}`;
     node('importKnowledge').textContent = (result.knowledge_preview || '') + (result.knowledge_truncated ? '\n（预览已截断，后台保存完整提取结果）' : '');
     node('importProgress').textContent = result.requires_zip_selection
-      ? '上传完成，尚未导入。请选择要交付的ZIP，再生成预览。'
+      ? '上传完成，尚未导入。请选择ZIP或网盘资料交付，再生成预览。'
       : '预览已生成，尚未正式导入。检查下方资料，勾选确认后点击“确认导入”。';
   }
   document.addEventListener('click', event => {
@@ -121,9 +122,10 @@
     });
   });
   node('previewSelectedZip').addEventListener('click', () => work(async()=>{
-    showPreview(await request(`/${token}/preview`, 'POST', {zip_index:Number(node('importZipSelection').value)}));
+    const value = node('importZipSelection').value;
+    showPreview(await request(`/${token}/preview`, 'POST', value === 'cloud' ? {delivery_kind:'cloud'} : {zip_index:Number(value),delivery_kind:'zip'}));
   }));
-  node('importZipSelection').addEventListener('change',()=>{preview=null;node('acceptProductImport').checked=false;node('importProgress').textContent='ZIP选择已变化，请点击“预览所选ZIP”，旧预览不能用于确认。';controls(false);});
+  node('importZipSelection').addEventListener('change',()=>{preview=null;node('acceptProductImport').checked=false;node('importProgress').textContent='交付方式已变化，请点击“预览交付资料”，旧预览不能用于确认。';controls(false);});
   node('acceptProductImport').addEventListener('change',()=>controls(busy));
   node('confirmProductImport').addEventListener('click',()=>work(async()=>{
     if (!preview?.preview_id || !node('acceptProductImport').checked || committed) return;
@@ -134,7 +136,7 @@
     if (result.committed !== true) throw new Error('服务器未确认导入成功，请保留现场检查');
     committed=true; uncertain=false;
     const summary=preview; preview=null;
-    node('importProgress').textContent=`✓ 正式导入成功 · 完成于 ${new Date().toLocaleString()}\nZIP：${summary.zip_name} · 版本：${summary.zip_hash.slice(0,12)} · 知识：${summary.knowledge_chars}字\n旧版本与原包已归档。尚未人工核验，自动发货允许范围未改变。`;
+    node('importProgress').textContent=`✓ 正式导入成功 · 完成于 ${new Date().toLocaleString()}\n交付：${summary.delivery_kind === 'cloud' ? '网盘资料（无ZIP）' : summary.zip_name} · 版本：${(summary.delivery_revision || summary.zip_hash).slice(0,12)} · 知识：${summary.knowledge_chars}字\n旧版本与原包已归档。尚未人工核验，自动发货允许范围未改变。`;
     node('importPreview').hidden=true;
     node('importUploadProgress').hidden=true;
     node('cancelProductImport').textContent='关闭';

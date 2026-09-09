@@ -36,6 +36,18 @@
 
 ## API顺序
 
+### 教程等无ZIP交付
+
+- 上传后在交付方式中明确选择“网盘资料交付（无ZIP）”，预览、确认导入；不生成伪ZIP或伪造ZIP hash。
+- 只把“商品资料”提取为本地自动回复知识，原包仍私有归档。`delivery_kind=cloud`和`delivery_revision`标识本地运营资料版本，不代表远端网盘文件内容已经自动检查。
+- 网盘URL、提取方式与该版本共同参与人工核验指纹；导入更新、切换ZIP/网盘模式、URL或提取码变化都不能沿用旧核验。
+- 核验API仍检查当前本地资料与登记版本一致，但不在线访问网盘。用户必须亲自检查网盘内容；同链接的远端内容发生变化时也应主动撤销并重新核验，系统不能自动感知该变化。
+- 自动发货继续复用同一资格/claim/幂等/限额/cutoff路径；无ZIP仅改变交付资料类型，绝不因导入自动人工核验或开启订单恢复。
+
+### 归档账号的空草稿
+
+`product_ownership.has_foreign_product_use`统一用于导入与目录交接。只有另一账号已归档、非当前激活、关闭发货、未绑定或已过期，且关联为无URL的草稿、无对应平台listing/订单，才视为无业务引用的历史占位。保留其关联记录，不删除或重绑。真实跨账号、历史订单、甚至已下架的其他listing仍阻断。
+
 1. POST `/api/product-imports`：明确item_id、product_dir及相对文件路径/大小清单。
 2. PUT `/api/product-imports/{id}/files/{index}`：顺序流式上传，单请求120秒；不接受重复文件。
 3. POST `/api/product-imports/{id}/preview`：可指定zip_index，返回本次preview_id。

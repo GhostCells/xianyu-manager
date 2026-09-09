@@ -674,6 +674,8 @@ function openEdit(dirName) {
   el("shareCode").value = product.share_code || "";
   state.editFingerprint = product.fulfillment_fingerprint;
   state.editZipHash = product.zip_hash;
+  state.editDeliveryRevision = product.delivery_revision;
+  state.editDeliveryKind = product.delivery_kind;
   el("suggestedPrice").value = centsToInput(product.suggested_price_cents);
   el("confirmedPrice").value = centsToInput(product.confirmed_price_cents);
   el("listingUrl").value = product.listing_url || "";
@@ -695,18 +697,21 @@ function renderShareVerification(product, changed = false) {
   const issues = product.delivery_issues || ['VERIFICATION_VERSION_UNCONFIRMED'];
   const packageMissing = issues.includes('DELIVERY_PACKAGE_UNCONFIRMED');
   const qualityBlocked = issues.includes('QUALITY_BLOCKED');
-  const safetyBlocked = issues.includes('DELIVERY_PACKAGE_SAFETY_UNCONFIRMED') || issues.includes('DELIVERY_PACKAGE_VERSION_CHANGED');
-  el('deliveryPackageStatus').textContent = product.zip_name && product.zip_hash
+  const cloud = product.delivery_kind === 'cloud';
+  const safetyBlocked = issues.includes('DELIVERY_PACKAGE_SAFETY_UNCONFIRMED') || issues.includes('DELIVERY_PACKAGE_VERSION_CHANGED') || issues.includes('DELIVERY_CLOUD_VERSION_UNCONFIRMED') || issues.includes('DELIVERY_KIND_INVALID');
+  el('deliveryPackageStatus').textContent = cloud
+    ? `网盘资料交付（无ZIP） · 本地资料版本 ${(product.delivery_revision || '').slice(0,12)}。此版本不代表网盘文件hash；网盘内容变化后请重新核验。`
+    : product.zip_name && product.zip_hash
     ? `已登记：${product.zip_name} · 版本 ${product.zip_hash.slice(0,12)}${safetyBlocked ? ' · ZIP安全记录失效，请重新导入' : qualityBlocked ? ' · 旧资料未确认，请导入商品包' : product.delivery_safety_fingerprint ? ' · ZIP安全检查通过' : ''}`
-    : '尚未登记交付ZIP，请先导入商品包；已有知识不代表交付包已就绪。';
+    : '尚未登记交付资料，请导入商品包；教程可选择“网盘资料交付（无ZIP）”。';
   el('shareSaveStatus').textContent = changed ? '有未保存的修改，请先保存网盘信息。'
     : product.share_url ? '当前网盘信息已保存。' : '尚未保存网盘链接。';
   el('verificationDetails').hidden = verified || !issues.length;
   el('verificationDetailText').textContent = shareErrorMessage([...new Set(issues)].join(','));
   status.textContent = changed ? '⚠ 交付资料已变化，需要重新核验；请先完成第2步保存。' : verified
-    ? `✓ 当前交付版本已人工核验 · 时间：${product.share_verified_at || '未记录'} · 核验摘要：${product.verified_fingerprint.slice(0,12)} · ZIP：${(product.zip_hash || '').slice(0,12)}`
-    : packageMissing ? '⚠ 尚未登记交付ZIP，请先完成第1步导入。'
-    : safetyBlocked ? '⚠ 交付ZIP或版本已变化，请重新导入后核验。'
+    ? `✓ 当前交付版本已人工核验 · 时间：${product.share_verified_at || '未记录'} · 核验摘要：${product.verified_fingerprint.slice(0,12)} · ${cloud ? '网盘资料版本' : 'ZIP'}：${(cloud ? product.delivery_revision || '' : product.zip_hash || '').slice(0,12)}`
+    : packageMissing ? '⚠ 尚未登记交付资料，请先完成第1步导入并选择交付方式。'
+    : safetyBlocked ? '⚠ 交付资料版本未确认或已变化，请重新导入后核验。'
     : qualityBlocked ? '⚠ 旧资料尚未确认交付安全，请通过第1步导入商品包。无需补齐发布图片。'
     : !product.share_url ? '⚠ 请先完成第2步，保存网盘信息。'
     : '⚠ 当前交付版本待人工核验。请本人打开网盘核对后确认。';
@@ -717,7 +722,7 @@ function renderShareVerification(product, changed = false) {
 function shareFieldsChanged() {
   const product = state.products.find(item => item.dir_name === el('editDirName').value);
   if (product) {
-    const changed = product.zip_hash !== state.editZipHash || ['share_url','share_code'].some(k => readEditFields()[k] !== state.editBaseline[k]);
+    const changed = product.zip_hash !== state.editZipHash || product.delivery_revision !== state.editDeliveryRevision || product.delivery_kind !== state.editDeliveryKind || ['share_url','share_code'].some(k => readEditFields()[k] !== state.editBaseline[k]);
     if (changed) el('editNotice').textContent = '';
     renderShareVerification(product, changed);
   }
@@ -757,7 +762,9 @@ async function updateKnowledgeFolder(mode, button) {
 
 function shareErrorMessage(detail) {
   const messages = {
-    DELIVERY_PACKAGE_UNCONFIRMED: '交付包尚未确认，请先补齐当前交付 ZIP 和版本记录；仅保存链接不能完成核验',
+    DELIVERY_PACKAGE_UNCONFIRMED: '交付资料尚未登记，请先导入并选择ZIP或网盘资料交付；仅保存链接不能完成核验',
+    DELIVERY_CLOUD_VERSION_UNCONFIRMED: '网盘交付的本地资料版本未确认或已变化，请重新导入后核验',
+    DELIVERY_KIND_INVALID: '交付方式与资料不一致，请重新导入并明确选择ZIP或网盘资料交付',
     QUALITY_BLOCKED: '旧资料质量检查尚未通过且没有当前ZIP安全记录，请导入商品包；无需补齐发布图片',
     DELIVERY_PACKAGE_SAFETY_UNCONFIRMED: '当前ZIP安全记录缺失或已失效，请重新导入商品包',
     DELIVERY_PACKAGE_VERSION_CHANGED: '服务器ZIP与登记版本不一致，请重新导入后核验',

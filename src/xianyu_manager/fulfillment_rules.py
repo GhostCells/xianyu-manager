@@ -26,6 +26,8 @@ def parse_listing_id(url: str) -> str:
 
 def fulfillment_fingerprint(product: dict[str, object]) -> str:
     values = [product.get(k) or "" for k in ("share_url", "share_code", "zip_hash")]
+    if product.get('delivery_kind', 'zip') == 'cloud':
+        values = ['cloud-v1', product.get('share_url') or '', product.get('share_code') or '', product.get('delivery_revision') or '']
     return hashlib.sha256(
         json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()
     ).hexdigest()
@@ -66,7 +68,15 @@ def delivery_issues(
         issues.append("SHARE_SYNTAX_INVALID")
     if operator_blocked:
         issues.append("OPERATOR_REPORTED_UNUSABLE")
-    if (
+    kind = product.get('delivery_kind', 'zip')
+    if kind not in ('zip', 'cloud'):
+        issues.append('DELIVERY_KIND_INVALID')
+    if kind == 'cloud':
+        if not re.fullmatch(r'[0-9a-f]{64}', str(product.get('delivery_revision') or '')):
+            issues.append('DELIVERY_CLOUD_VERSION_UNCONFIRMED')
+        if product.get('zip_name') or product.get('zip_hash') or product.get('zip_size'):
+            issues.append('DELIVERY_KIND_INVALID')
+    elif (
         not product.get("zip_name")
         or not re.fullmatch(r"[0-9a-f]{64}", str(product.get("zip_hash") or ""))
         or not isinstance(product.get("zip_size"), int)
@@ -80,7 +90,9 @@ def delivery_issues(
         except ValueError:
             errors = None
     safety = product.get('delivery_safety_fingerprint')
-    if safety:
+    if kind == 'cloud':
+        pass  # No fictitious ZIP or publishing quality approval for netdisk tutorials.
+    elif safety:
         if safety != package_safety_fingerprint(product):
             issues.append('DELIVERY_PACKAGE_SAFETY_UNCONFIRMED')
     elif (

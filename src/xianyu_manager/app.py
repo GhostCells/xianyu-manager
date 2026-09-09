@@ -1025,7 +1025,7 @@ async def upload_product_file(token: str, index: int, request: Request):
 async def preview_product_import(token: str, request: Request):
     account_id = _import_account(request)
     body = await _import_json(request)
-    return await _import_call(product_imports.preview, account_id, token, body.get('zip_index'))
+    return await _import_call(product_imports.preview, account_id, token, body.get('zip_index'), body.get('delivery_kind', 'zip'))
 
 
 @app.post('/api/product-imports/{token}/confirm')
@@ -1237,7 +1237,10 @@ def verify_share(dir_name: str, payload: ShareConfirmation) -> dict[str, object]
     try:
         name = Path(unquote(dir_name)).name
         product = database.get_product(name)
-        if product and product.get('delivery_safety_fingerprint'):
+        if product and product.get('delivery_kind') == 'cloud':
+            from .delivery_package import check_registered_cloud
+            check_registered_cloud(settings.product_library, product)
+        elif product and product.get('delivery_safety_fingerprint'):
             from .delivery_package import check_registered_package
             receipt = check_registered_package(settings.product_library, product)
             if receipt != product['delivery_safety_fingerprint']:

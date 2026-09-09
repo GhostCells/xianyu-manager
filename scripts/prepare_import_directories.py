@@ -11,6 +11,10 @@ import pwd
 import re
 import sqlite3
 import stat
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from xianyu_manager.product_ownership import has_foreign_product_use
 
 
 def plan_directories(database, library, account_id, uid):
@@ -19,14 +23,12 @@ def plan_directories(database, library, account_id, uid):
     c=sqlite3.connect('file:'+str(database)+'?mode=ro',uri=True)
     rows=c.execute('''SELECT p.dir_name FROM products p JOIN account_products ap ON ap.product_dir_name=p.dir_name
         WHERE ap.account_id=? AND p.catalog_status NOT IN ('legacy','listing_only')
-        AND NOT EXISTS (SELECT 1 FROM account_products other WHERE other.product_dir_name=p.dir_name AND other.account_id<>?)
-        AND NOT EXISTS (SELECT 1 FROM account_listings other WHERE other.matched_product_dir_name=p.dir_name AND other.account_id<>?)
-        ORDER BY p.dir_name''',(account_id,account_id,account_id)).fetchall()
+        ORDER BY p.dir_name''',(account_id,)).fetchall()
     if c.execute("SELECT 1 FROM orders WHERE account_id=? AND delivery_status='sending'",(account_id,)).fetchone():
         raise ValueError('SEND_IN_PROGRESS')
-    c.close()
     result=[]
     for (name,) in rows:
+        if has_foreign_product_use(c, name, account_id):continue
         # Old listing placeholders are database records, not product folders.
         if re.fullmatch(r'__listing__\d+',name):continue
         if not re.fullmatch(r'\d{2}-[^/\\:]+',name):
@@ -42,6 +44,7 @@ def plan_directories(database, library, account_id, uid):
         if mode & 0o7000:raise ValueError('Unexpected special permission bits: '+name)
         if s.st_uid!=uid or mode & 0o700!=0o700:
             result.append({'name':name,'inode':s.st_ino,'device':s.st_dev,'uid':s.st_uid,'gid':s.st_gid,'mode':mode,'new_uid':uid,'new_mode':mode|0o700})
+    c.close()
     return result
 
 

@@ -249,7 +249,7 @@
         <div class="dialog-heading import-dialog-heading"><h2 id="importTitle">第1步 · 导入商品包</h2><button id="closeProductImport" type="button" class="icon-button" aria-label="关闭导入窗口，保留记录">×</button></div>
         <p class="knowledge-hint">选择文件夹 → 上传并预览 → 确认导入。完成后继续保存网盘信息。</p>
         <p id="importIdentity"></p>
-        <p class="knowledge-hint">原包私有归档；仅“商品资料”用于知识，“客户交付”指定ZIP用于交付。勿上传密码、凭据或无关私人文件。</p>
+        <p class="knowledge-hint">原包私有归档；“商品资料”用于自动回复。交付可选“客户交付”中的ZIP，或教程等网盘资料（无ZIP）。勿上传密码、凭据或无关私人文件。</p>
         <div id="importUploadFields">
         <label>本地Product目录（已有映射保持不变）<input id="importProductDir" maxlength="120" placeholder="45-商品名称" required /></label>
         <label>选择整个商品文件夹<input id="importFolder" type="file" webkitdirectory multiple /></label>
@@ -259,11 +259,11 @@
         <p id="importProgress" role="status" aria-live="polite"></p>
         <progress id="importUploadProgress" max="100" value="0" aria-label="文件上传进度" hidden></progress>
         <section id="importPreview" hidden>
-          <label>客户交付ZIP<select id="importZipSelection"></select></label>
-          <button id="previewSelectedZip" type="button" class="secondary">预览所选ZIP</button>
+          <label>交付方式 / 客户交付ZIP<select id="importZipSelection"></select></label>
+          <button id="previewSelectedZip" type="button" class="secondary">预览交付资料</button>
           <pre id="importPreviewText" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
           <details><summary>将用于自动回复的知识预览</summary><pre id="importKnowledge" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
-          <label class="check"><input type="checkbox" id="acceptProductImport" /> 我已确认商品与ZIP对应正确；同意替换运营资料、保留旧版本，并撤销旧交付核验。</label>
+          <label class="check"><input type="checkbox" id="acceptProductImport" /> 我已确认商品与所选交付方式对应正确；同意替换运营资料、保留旧版本，并撤销旧交付核验。</label>
           <button id="confirmProductImport" type="button" class="primary" disabled>确认导入（不核验、不开放发货）</button>
         </section>
         <p id="importError" class="error" role="alert"></p>
@@ -272,7 +272,7 @@
         <div class="import-dialog-footer"><button id="leaveProductImport" type="button" class="secondary">关闭（保留上传记录）</button><p id="importCloseHint" class="knowledge-hint"></p></div>
       </form>
     </dialog>
-    <script src="/static/app.js?v=20260909-package-safety" defer></script>
-    <script src="/static/product-import.js?v=20260909-upload-close" defer></script>
+    <script src="/static/app.js?v=20260909-cloud-delivery" defer></script>
+    <script src="/static/product-import.js?v=20260909-cloud-delivery" defer></script>
   </body>
 </html>

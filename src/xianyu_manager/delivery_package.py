@@ -1,9 +1,41 @@
 """Local ZIP safety, independent of seller publishing/asset quality rules."""
 from pathlib import Path, PurePosixPath
+import hashlib
+import json
 import zipfile
 
 from .scanner import sha256_file
 from .fulfillment_rules import package_safety_fingerprint
+
+
+def tree_hash(path):
+    """Version of local operational assets, NOT a hash of remote netdisk files."""
+    if path.is_symlink():
+        raise ValueError('商品目录不能是符号链接')
+    if not path.exists():
+        entries = []
+    else:
+        if not path.is_dir():
+            raise ValueError('商品路径不是目录，不能覆盖')
+        entries = []
+        for item in sorted(path.rglob('*')):
+            if item.is_symlink():
+                raise ValueError('商品目录存在符号链接，不能覆盖')
+            if item.is_file():
+                entries.append((str(item.relative_to(path)), sha256_file(item)))
+    return hashlib.sha256(json.dumps(entries, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def check_registered_cloud(library: Path, product: dict) -> None:
+    name = str(product.get('dir_name') or '')
+    if not name or name in {'.', '..'} or any(c in name for c in '/\\:'):
+        raise ValueError('DELIVERY_CLOUD_VERSION_UNCONFIRMED')
+    folder = library / name
+    try:
+        if not folder.is_dir() or tree_hash(folder) != product.get('delivery_revision'):
+            raise ValueError('DELIVERY_CLOUD_VERSION_UNCONFIRMED')
+    except (OSError, ValueError):
+        raise ValueError('DELIVERY_CLOUD_VERSION_UNCONFIRMED') from None
 
 
 def check_zip(package: Path) -> None:

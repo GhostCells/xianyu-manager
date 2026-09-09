@@ -28,7 +28,7 @@ p.zip_hash='c'.repeat(64);p.fulfillment_fingerprint='d'.repeat(64);ctx.openEdit(
 const fail=ctx.confirmShare();resolve({ok:false,json:async()=>({detail:'synthetic failure'})});await fail;
 assert.equal(el('formError').textContent,'synthetic failure');assert.equal(notices.length,0);assert(!ctx.state.shareConfirmPending);
 const blocked=ctx.confirmShare();resolve({ok:false,json:async()=>({detail:'DELIVERY_PACKAGE_UNCONFIRMED,QUALITY_BLOCKED'})});await blocked;
-assert(el('formError').textContent.includes('交付包尚未确认'));assert(el('formError').textContent.includes('质量检查尚未通过'));
+assert(el('formError').textContent.includes('交付资料尚未登记'));assert(el('formError').textContent.includes('质量检查尚未通过'));
 el('shareUrl').value='new-url';ctx.shareFieldsChanged();
 const saving=ctx.saveEdit({preventDefault(){}});const count=requests.length;
 await ctx.saveEdit({preventDefault(){}});await ctx.confirmShare();assert.equal(requests.length,count);
@@ -57,8 +57,13 @@ ctx.renderShareVerification(imported);assert(!el('confirmShare').disabled);
 assert(el('deliveryPackageStatus').textContent.includes('ZIP安全检查通过'));
 assert(!el('shareVerificationStatus').textContent.includes('质量'));
 ctx.renderShareVerification({...imported,delivery_issues:['DELIVERY_PACKAGE_SAFETY_UNCONFIRMED']});
-assert(el('confirmShare').disabled);assert(el('shareVerificationStatus').textContent.includes('版本已变化'));
+assert(el('confirmShare').disabled);assert(el('shareVerificationStatus').textContent.includes('版本未确认或已变化'));
 ctx.renderShareVerification({...imported,delivery_issues:['SHARE_SYNTAX_INVALID']});assert(el('confirmShare').disabled);
+// Cloud tutorials have an explicit version and never require a fake ZIP.
+const cloud={...imported,zip_name:'',zip_hash:'',zip_size:0,delivery_kind:'cloud',delivery_revision:'e'.repeat(64),delivery_safety_fingerprint:''};
+ctx.renderShareVerification(cloud);assert(!el('confirmShare').disabled);
+assert(el('deliveryPackageStatus').textContent.includes('网盘资料交付（无ZIP）'));
+ctx.renderShareVerification({...cloud,delivery_issues:['DELIVERY_CLOUD_VERSION_UNCONFIRMED']});assert(el('confirmShare').disabled);
 })().catch(e=>{console.error(e);process.exitCode=1});
 """
     result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)

@@ -16,7 +16,8 @@ import uuid
 from datetime import datetime, timezone
 
 from .fulfillment_rules import parse_listing_id, package_safety_fingerprint
-from .delivery_package import check_zip, check_registered_package
+from .delivery_package import check_zip, check_registered_package, tree_hash
+from .product_ownership import has_foreign_product_use
 from .knowledge import load_knowledge_folder, TEXT_EXTENSIONS
 from .scanner import ScannedProduct, sha256_file
 
@@ -46,22 +47,6 @@ def safe_path(value):
     return PurePosixPath(value)
 
 
-def tree_hash(path):
-    if path.is_symlink():
-        raise ValueError('商品目录不能是符号链接')
-    if not path.exists():
-        return digest([])
-    if not path.is_dir():
-        raise ValueError('商品路径不是目录，不能覆盖')
-    entries = []
-    for item in sorted(path.rglob('*')):
-        if item.is_symlink():
-            raise ValueError('商品目录存在符号链接，不能覆盖')
-        if item.is_file():
-            entries.append((str(item.relative_to(path)), sha256_file(item)))
-    return digest(entries)
-
-
 def import_metadata(candidate, zip_name):
     """Register uploaded assets without invoking the publishing/quality validator.
 
@@ -72,7 +57,7 @@ def import_metadata(candidate, zip_name):
     images = candidate / '图片'
     return ScannedProduct(
         dir_name=candidate.name, number=int(candidate.name[:2]), name=candidate.name[3:],
-        title='', zip_name=zip_name, zip_hash=sha256_file(package), zip_size=package.stat().st_size,
+        title='', zip_name=zip_name, zip_hash=sha256_file(package) if zip_name else '', zip_size=package.stat().st_size if zip_name else 0,
         image_count=sum(p.is_file() for p in images.iterdir()) if images.is_dir() else 0,
         quality_status='unknown', quality_errors=[], scanned_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -145,8 +130,8 @@ class ProductImport:
         configured = connection.execute('SELECT * FROM account_products WHERE account_id=? AND product_dir_name=?', (account_id, name)).fetchone()
         if configured and parse_listing_id(configured['listing_url']) not in {'', item_id}:
             raise ValueError('本地商品已登记其他闲鱼商品')
-        if connection.execute('SELECT 1 FROM account_products WHERE product_dir_name=? AND account_id<>?', (name, account_id)).fetchone():
-            raise ValueError('商品被其他账号引用，不允许覆盖')
+        if has_foreign_product_use(connection, name, account_id):
+            raise ValueError('商品仍有其他账号的有效关联或历史业务记录，不允许覆盖；已归档的空草稿不会阻断')
         if connection.execute('SELECT 1 FROM account_listings WHERE matched_product_dir_name=? AND (account_id<>? OR item_id<>?)', (name, account_id, item_id)).fetchone():
             raise ValueError('商品存在其他映射，请先人工处理')
         product = connection.execute('SELECT * FROM products WHERE dir_name=?', (name,)).fetchone()
@@ -232,7 +217,9 @@ class ProductImport:
             temp.unlink(missing_ok=True)
         return {'size': size, 'sha256': h.hexdigest()}
 
-    def preview(self, account_id, token, zip_index):
+    def preview(self, account_id, token, zip_index, delivery_kind='zip'):
+        if delivery_kind not in ('zip', 'cloud') or (delivery_kind == 'cloud' and zip_index is not None):
+            raise ValueError('请选择明确的交付方式')
         if zip_index is not None and type(zip_index) is not int:
             raise ValueError('ZIP选择编号无效')
         with self.lock:
@@ -244,14 +231,15 @@ class ProductImport:
                 if not p.is_file() or p.stat().st_size != f['size']:
                     raise ValueError('文件尚未完整上传')
             packages = [{'index': i, 'path': f['path'], 'size': f['size']} for i, f in enumerate(job['files']) if PurePosixPath(f['path']).parts[0] == '客户交付' and f['path'].lower().endswith('.zip')]
-            if zip_index is None:
+            if zip_index is None and delivery_kind == 'zip':
                 if len(packages) != 1:
-                    return {'requires_zip_selection': True, 'packages': packages, 'message': '请选择客户交付中的一个ZIP' if packages else '客户交付目录中没有ZIP'}
+                    return {'requires_zip_selection': True, 'packages': packages, 'message': '请选择客户交付中的一个ZIP，或选择网盘资料交付' if packages else '没有交付ZIP；教程等商品可选择“网盘资料交付（无ZIP）”，再生成预览'}
                 zip_index = packages[0]['index']
-            if zip_index not in {p['index'] for p in packages}:
+            if delivery_kind == 'zip' and zip_index not in {p['index'] for p in packages}:
                 raise ValueError('只能选择客户交付目录中的ZIP')
-            package = directory / f'{zip_index}.blob'
-            check_zip(package)
+            if delivery_kind == 'zip':
+                package = directory / f'{zip_index}.blob'
+                check_zip(package)
             # Private candidates never appear under the scanned production library.
             candidate = directory / 'candidate' / job['name']
             if candidate.exists():
@@ -277,15 +265,17 @@ class ProductImport:
             knowledge = load_knowledge_folder(knowledge_dir)
             if not knowledge.text.strip():
                 raise ValueError('商品资料未提取到有效知识，原生产资料未变更')
-            zip_name = PurePosixPath(job['files'][zip_index]['path']).name
-            shutil.copyfile(package, candidate / zip_name)
+            zip_name = PurePosixPath(job['files'][zip_index]['path']).name if delivery_kind == 'zip' else ''
+            if zip_name:
+                shutil.copyfile(package, candidate / zip_name)
             (candidate / '发布文案.txt').write_text(knowledge.text, encoding='utf-8')
             # Neither uploaded reports nor the old publishing validator approve quality.
             scanned = import_metadata(candidate, zip_name)
-            job.update(phase='preview', zip_index=zip_index, candidate_hash=tree_hash(candidate), preview_id=uuid.uuid4().hex, validation_scope='upload_safety_only')
+            job.update(phase='preview', zip_index=zip_index, delivery_kind=delivery_kind, candidate_hash=tree_hash(candidate), preview_id=uuid.uuid4().hex, validation_scope='upload_safety_only')
             self._save(directory, job)
             return {'preview_id': job['preview_id'], 'item_id': job['item_id'], 'title': job['title'], 'product': job['name'], 'existing': job['existing'], 'packages': packages,
                     'zip_name': zip_name, 'zip_hash': scanned.zip_hash, 'zip_size': scanned.zip_size,
+                    'delivery_kind': delivery_kind, 'delivery_revision': job['candidate_hash'] if delivery_kind == 'cloud' else '',
                     'knowledge_sources': source_names, 'knowledge_chars': knowledge.chars,
                     'knowledge_preview': knowledge.text[:1600], 'knowledge_truncated': knowledge.chars > 1600,
                     'knowledge_warnings': list(knowledge.warnings), 'quality_status': scanned.quality_status, 'validation_scope':'upload_safety_only',
@@ -304,7 +294,8 @@ class ProductImport:
             if tree_hash(candidate) != job['candidate_hash'] or tree_hash(target) != job['disk_baseline']:
                 raise ValueError('文件版本已变化，请重新导入预览')
             self._prepare_destination(job['name'])
-            zip_name = PurePosixPath(job['files'][job['zip_index']]['path']).name
+            kind = job.get('delivery_kind', 'zip')
+            zip_name = PurePosixPath(job['files'][job['zip_index']]['path']).name if kind == 'zip' else ''
             scanned = import_metadata(candidate, zip_name)
             knowledge = load_knowledge_folder(candidate / '商品资料')
             with self.db.connect() as c:
@@ -337,9 +328,9 @@ class ProductImport:
                               (job['name'], scanned.number, scanned.name, job['title'], scanned.scanned_at))
                     c.execute('''UPDATE products SET zip_name=?,zip_hash=?,zip_size=?,image_count=?,quality_status=?,quality_errors_json=?,scanned_at=?,
                         knowledge_text=?,knowledge_hash=?,knowledge_chars=?,knowledge_source_path=?,knowledge_file_count=?,knowledge_updated_at=CURRENT_TIMESTAMP,
-                        share_verified=0,share_needs_review=1,verified_fingerprint='',delivery_safety_fingerprint=?,updated_at=CURRENT_TIMESTAMP WHERE dir_name=?''',
+                        share_verified=0,share_needs_review=1,verified_fingerprint='',delivery_safety_fingerprint=?,delivery_kind=?,delivery_revision=?,updated_at=CURRENT_TIMESTAMP WHERE dir_name=?''',
                               (scanned.zip_name,scanned.zip_hash,scanned.zip_size,scanned.image_count,scanned.quality_status,json.dumps(scanned.quality_errors,ensure_ascii=False),scanned.scanned_at,
-                               knowledge.text,knowledge.content_hash,knowledge.chars,str(target/'商品资料'),knowledge.file_count,package_safety_fingerprint(scanned.to_dict()),job['name']))
+                               knowledge.text,knowledge.content_hash,knowledge.chars,str(target/'商品资料'),knowledge.file_count,package_safety_fingerprint(scanned.to_dict()) if kind == 'zip' else '',kind,job['candidate_hash'] if kind == 'cloud' else '',job['name']))
                     # Explicitly selected listing only; never fuzzy-match or touch other mappings.
                     if not configured:
                         c.execute('''INSERT INTO account_products(account_id,product_dir_name,enabled,listing_url,listing_status) VALUES(?,?,1,?,'published')''',
@@ -370,6 +361,8 @@ class ProductImport:
             directory, job = self._job(account_id, token, allow_expired=True)
             if job['phase'] != 'committed':
                 raise ValueError('IMPORT_NOT_COMMITTED')
+            if job.get('delivery_kind', 'zip') != 'zip':
+                raise ValueError('IMPORT_NOT_ZIP_DELIVERY')
             target = self.settings.product_library / job['name']
             if tree_hash(target) != job['candidate_hash']:
                 raise ValueError('IMPORTED_ASSETS_CHANGED')

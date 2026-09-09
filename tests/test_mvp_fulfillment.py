@@ -21,6 +21,17 @@ def test_mvp_recovery_and_selection_remain_disabled():
         with pytest.raises(RuntimeOperationBlocked): p.require_delivery_item(item)
 
 
+def test_expanded_allowlist_does_not_enable_recovery_or_bypass_cutoff():
+    from dataclasses import replace
+    items=tuple(str(100000000000+i) for i in range(31))
+    p=replace(policy(),fulfillment_items=items)
+    for item in items:p.require_delivery_item(item)
+    assert not p.order_recovery_enabled
+    with pytest.raises(RuntimeOperationBlocked):p.require_selection()
+    with pytest.raises(RuntimeOperationBlocked):p.require_delivery_item('999999999999')
+    with pytest.raises(ValueError):replace(p,order_cutoff_at='').require_fulfillment()
+
+
 def test_mvp_no_historical_or_group_paths(db):
     account=setup_order(db)
     s=DeliveryService(db.path.parent/'profiles',None,db,SecretStore(db.path.parent/'secret'),runtime_policy=policy())
