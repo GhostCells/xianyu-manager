@@ -159,7 +159,7 @@ def test_multiple_zip_requires_choice(intake):
     r=imp.preview(a,t,r['packages'][1]['index']);assert r['zip_name']=='second.zip'
 
 
-@pytest.mark.parametrize('filename',['../escape','/absolute','x\\evil','customer/../escape'])
+@pytest.mark.parametrize('filename',['../escape','/absolute','x\\..\\evil','customer/../escape'])
 def test_zip_unsafe(intake,filename):
     imp,a=intake;t=uploaded(intake,{'45-demo/客户交付/delivery.zip':zipped(filename)})
     with pytest.raises(ValueError):imp.preview(a,t,None)

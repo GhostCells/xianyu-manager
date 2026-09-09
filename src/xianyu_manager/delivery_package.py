@@ -46,8 +46,10 @@ def check_zip(package: Path) -> None:
             if not entries or len(entries) > 10000 or sum(e.file_size for e in entries) > 1024**3:
                 raise ValueError('ZIP内容为空或超过安全检查上限')
             for e in entries:
-                path = PurePosixPath(e.filename)
-                if path.is_absolute() or '..' in path.parts or '\\' in e.filename or ':' in e.filename or e.flag_bits & 1 or (e.external_attr >> 16) & 0o170000 == 0o120000:
+                # Accept Windows ZIP separators without changing the archive.
+                # Normalize before checking traversal, rooted paths and UNC paths.
+                path = PurePosixPath(e.filename.replace('\\', '/'))
+                if path.is_absolute() or '..' in path.parts or ':' in e.filename or e.flag_bits & 1 or (e.external_attr >> 16) & 0o170000 == 0o120000:
                     raise ValueError('ZIP含不安全路径、符号链接或加密文件')
                 if e.file_size > max(e.compress_size, 1) * 200:
                     raise ValueError('ZIP压缩比例超过安全上限')
