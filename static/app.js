@@ -40,7 +40,7 @@ function badges(product) {
   if (!product.enabled_for_account) return `<span class="badge neutral">仅在商品库</span>${knowledgeBadge}`;
   result.push(product.quality_status === "passed" ? '<span class="badge ok">质检通过</span>' : '<span class="badge bad">质检失败</span>');
   result.push(knowledgeBadge);
-  if (Array.isArray(product.delivery_issues) && !product.delivery_issues.length) result.push('<span class="badge ok">交付资料已人工核验</span>');
+  if (Array.isArray(product.delivery_issues) && !product.delivery_issues.length) result.push(`<span class="badge ok">${state.catalogDelivery ? '交付资料齐全' : '交付资料已人工核验'}</span>`);
   else result.push('<span class="badge warn">交付资料待复核（非在线失效判定）</span>');
   if (product.listing_status === "published") result.push('<span class="badge blue">登记已发布（非实时状态）</span>');
   else if (product.listing_status === "paused") result.push('<span class="badge neutral">已暂停</span>');
@@ -700,7 +700,7 @@ function renderShareVerification(product, changed = false) {
   const cloud = product.delivery_kind === 'cloud';
   const safetyBlocked = issues.includes('DELIVERY_PACKAGE_SAFETY_UNCONFIRMED') || issues.includes('DELIVERY_PACKAGE_VERSION_CHANGED') || issues.includes('DELIVERY_CLOUD_VERSION_UNCONFIRMED') || issues.includes('DELIVERY_KIND_INVALID');
   el('deliveryPackageStatus').textContent = cloud
-    ? `网盘资料交付（无ZIP） · 本地资料版本 ${(product.delivery_revision || '').slice(0,12)}。此版本不代表网盘文件hash；网盘内容变化后请重新核验。`
+    ? `网盘资料交付（无ZIP） · 本地资料版本 ${(product.delivery_revision || '').slice(0,12)}。此版本不代表网盘文件hash；${state.catalogDelivery ? '请自行确保网盘内容与商品对应。' : '网盘内容变化后请重新核验。'}`
     : product.zip_name && product.zip_hash
     ? `已登记：${product.zip_name} · 版本 ${product.zip_hash.slice(0,12)}${safetyBlocked ? ' · ZIP安全记录失效，请重新导入' : qualityBlocked ? ' · 旧资料未确认，请导入商品包' : product.delivery_safety_fingerprint ? ' · ZIP安全检查通过' : ''}`
     : '尚未登记交付资料，请导入商品包；教程可选择“网盘资料交付（无ZIP）”。';
@@ -708,6 +708,19 @@ function renderShareVerification(product, changed = false) {
     : product.share_url ? '当前网盘信息已保存。' : '尚未保存网盘链接。';
   el('verificationDetails').hidden = verified || !issues.length;
   el('verificationDetailText').textContent = shareErrorMessage([...new Set(issues)].join(','));
+  el('verifyStepTitle').textContent = state.catalogDelivery ? '3. 自动发货资料状态' : '3. 人工核验当前版本';
+  el('deliveryEligibilityHint').textContent = state.catalogDelivery
+    ? '当前在售、精确映射且交付资料齐全即可进入新订单自动发货判断，无需人工核验。请自行确保网盘可用及资料正确。'
+    : '请本人打开网盘，确认商品、交付文件和提取方式正确，再点击核验。';
+  el('confirmShare').hidden = Boolean(state.catalogDelivery);
+  el('revokeShare').hidden = Boolean(state.catalogDelivery);
+  if (state.catalogDelivery) {
+    status.style.color = !changed && !issues.length ? '#167342' : '#8a5100';
+    status.textContent = changed ? '有未保存修改，请保存网盘信息。' : issues.length
+      ? `资料尚未齐全：${shareErrorMessage(issues.join(','))}`
+      : '✓ 交付资料齐全，无需人工核验；当前在售且精确映射后，新付款订单将自动判断发货。';
+    return;
+  }
   status.textContent = changed ? '⚠ 交付资料已变化，需要重新核验；请先完成第2步保存。' : verified
     ? `✓ 当前交付版本已人工核验 · 时间：${product.share_verified_at || '未记录'} · 核验摘要：${product.verified_fingerprint.slice(0,12)} · ${cloud ? '网盘资料版本' : 'ZIP'}：${(cloud ? product.delivery_revision || '' : product.zip_hash || '').slice(0,12)}`
     : packageMissing ? '⚠ 尚未登记交付资料，请先完成第1步导入并选择交付方式。'
@@ -850,7 +863,7 @@ async function saveEdit(event, shareOnly = false) {
         if (key === 'enabled_for_account') control.checked = value;
         else control.value = key.endsWith('_cents') ? centsToInput(value) : value || '';
       }
-      el('editNotice').textContent = `${shareOnly ? '网盘信息' : '配置'}已保存。保存不代表核验或开放发货。${Object.keys(maintenanceDraft).length ? '维护设置仍有未保存修改。' : '请按第3步完成必要的人工核验。'}`;
+      el('editNotice').textContent = state.catalogDelivery ? '已保存。资料齐全且当前在售、精确映射的商品将自动进入新订单发货判断，无需人工核验。' : `${shareOnly ? '网盘信息' : '配置'}已保存。保存不代表核验或开放发货。${Object.keys(maintenanceDraft).length ? '维护设置仍有未保存修改。' : '请按第3步完成必要的人工核验。'}`;
     }
   } catch (error) {
     el('formError').textContent = saved ? '保存已成功，但最新状态读取失败；请重新打开配置确认后再核验。' : shareErrorMessage(error.message || '保存失败，请检查连接');
@@ -1015,6 +1028,7 @@ async function initializePage() {
   const response = await fetch("/api/health");
   if (!response.ok) throw new Error("读取 API 状态失败");
   const health = await response.json();
+  state.catalogDelivery = health.catalog_delivery === true;
   state.prepareMode = health.mode === "prepare";
   state.runtimeAccountId = health.runtime_account_id;
   state.safeMode = health.safe_mode === true || state.prepareMode;

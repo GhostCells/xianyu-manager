@@ -30,6 +30,7 @@ class Settings:
     order_cutoff_at: str = ''
     resident_reply: bool = False
     mvp_fulfillment: bool = False
+    catalog_delivery: bool = False
     fulfillment_items: tuple[str, ...] = ()
 
 
@@ -134,6 +135,10 @@ def read_safe_mode() -> bool:
     )
 
 
+def read_catalog_delivery() -> bool:
+    return _parse_bool(os.environ.get('XIANYU_MANAGER_CATALOG_DELIVERY', ''), name='XIANYU_MANAGER_CATALOG_DELIVERY', default=False)
+
+
 def read_runtime_options() -> dict:
     prepare = _parse_bool(os.environ.get('XIANYU_MANAGER_PREPARE_MODE', ''), name='XIANYU_MANAGER_PREPARE_MODE', default=False)
     login = _parse_bool(os.environ.get('XIANYU_MANAGER_LOGIN_AUTHORIZED', ''), name='XIANYU_MANAGER_LOGIN_AUTHORIZED', default=False)
@@ -151,6 +156,9 @@ def read_runtime_options() -> dict:
         raise ValueError('REPLY_ONLY requires ACCOUNT_ID')
     resident = _parse_bool(os.environ.get('XIANYU_MANAGER_RESIDENT_REPLY', ''), name='XIANYU_MANAGER_RESIDENT_REPLY', default=False)
     mvp = _parse_bool(os.environ.get('XIANYU_MANAGER_MVP_FULFILLMENT', ''), name='XIANYU_MANAGER_MVP_FULFILLMENT', default=False)
+    catalog = read_catalog_delivery()
+    if catalog and not mvp:
+        raise ValueError('CATALOG_DELIVERY requires recovery-disabled MVP mode')
     items = tuple(x.strip() for x in os.environ.get('XIANYU_MANAGER_FULFILLMENT_ITEMS', '').split(',') if x.strip())
     if any(not x.isascii() or not x.isdigit() for x in items) or len(set(items)) != len(items):
         raise ValueError('FULFILLMENT_ITEMS must be unique complete numeric IDs')
@@ -159,10 +167,10 @@ def read_runtime_options() -> dict:
     cutoff = os.environ.get('XIANYU_MANAGER_ORDER_CUTOFF_AT', '').strip()
     if mvp:
         from .order_cutoff import utc_time
-        if reply_only or prepare or account != 2 or not resident or not items:
+        if reply_only or prepare or account != 2 or not resident or (not items and not catalog):
             raise ValueError('MVP_FULFILLMENT requires resident account2, nonempty allowlist and normal mode')
         utc_time(cutoff, field='ORDER_CUTOFF')
     return dict(prepare_mode=prepare, account_id=account, login_authorized=login,
                 reply_only=reply_only, resident_reply=resident, order_cutoff_at=cutoff,
-                mvp_fulfillment=mvp, fulfillment_items=items,
+                mvp_fulfillment=mvp, fulfillment_items=items, catalog_delivery=catalog,
                 egress_status_path=Path(path) if path else None)

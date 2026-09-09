@@ -44,10 +44,13 @@ def package_safety_fingerprint(product: dict[str, object]) -> str:
 def delivery_issues(
     product: dict[str, object],
     *,
-    require_verified: bool = True,
+    require_verified: bool | None = None,
     operator_blocked: bool = False,
 ) -> list[str]:
     from .scanner import delivery_blocking_errors
+    if require_verified is None:
+        from .config import read_catalog_delivery
+        require_verified = not read_catalog_delivery()
 
     issues = []
     url = str(product.get("share_url") or "")

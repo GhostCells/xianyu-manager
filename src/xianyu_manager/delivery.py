@@ -983,7 +983,8 @@ class DeliveryService:
                 and product["listing_status"] == "published"
                 and not delivery_issues(product)
                 and listing_item_id(str(product["listing_url"]))
-                and (not self.runtime_policy.mvp_fulfillment or listing_item_id(str(product['listing_url'])) in self.runtime_policy.fulfillment_items)
+                and (self.runtime_policy.catalog_delivery or not self.runtime_policy.mvp_fulfillment or listing_item_id(str(product['listing_url'])) in self.runtime_policy.fulfillment_items)
+                and (not self.runtime_policy.catalog_delivery or self.database.get_product_by_listing_item_id(listing_item_id(str(product['listing_url'])), account_id) is not None)
             ]
             if not ready_products:
                 raise ValueError("没有同时满足已上架、已验证网盘链接条件的商品")

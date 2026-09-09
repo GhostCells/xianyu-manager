@@ -195,7 +195,7 @@
         </section>
         <section class="delivery-step" aria-labelledby="verifyStepTitle">
         <h3 id="verifyStepTitle">3. 人工核验当前版本</h3>
-        <p class="knowledge-hint">请本人打开网盘，确认商品、交付文件和提取方式正确，再点击核验。核验不会自动扩大发货范围。</p>
+        <p id="deliveryEligibilityHint" class="knowledge-hint">请本人打开网盘，确认商品、交付文件和提取方式正确，再点击核验。核验不会自动扩大发货范围。</p>
         <p id="shareVerificationStatus" role="status" aria-live="polite"></p>
         <details id="verificationDetails"><summary>查看具体阻断原因</summary><p id="verificationDetailText"></p></details>
         <button id="confirmShare" type="button" class="primary">我已人工核验当前交付资料</button>
@@ -272,7 +272,7 @@
         <div class="import-dialog-footer"><button id="leaveProductImport" type="button" class="secondary">关闭（保留上传记录）</button><p id="importCloseHint" class="knowledge-hint"></p></div>
       </form>
     </dialog>
-    <script src="/static/app.js?v=20260909-cloud-delivery" defer></script>
+    <script src="/static/app.js?v=20260909-catalog-delivery" defer></script>
     <script src="/static/product-import.js?v=20260909-cloud-delivery" defer></script>
   </body>
 </html>

@@ -2115,9 +2115,19 @@ class Database:
             return None
         product = matches[0]
         snapshots = connection.execute(
-            "SELECT matched_product_dir_name,is_active FROM account_listings WHERE account_id=? AND item_id=?",
+            "SELECT matched_product_dir_name,is_active,source_kind,source_text FROM account_listings WHERE account_id=? AND item_id=?",
             (account_id, item_id),
         ).fetchall()
+        from .config import read_catalog_delivery
+        if read_catalog_delivery():
+            if len(snapshots) != 1 or snapshots[0]['source_kind'] != 'platform_inventory':
+                return None
+            try:
+                status = json.loads(snapshots[0]['source_text'] or '{}').get('itemStatus')
+            except (ValueError, AttributeError):
+                return None
+            if str(status) not in {'0', '0.0'}:
+                return None
         if any(
             not row["is_active"]
             or row["matched_product_dir_name"] != product["dir_name"]

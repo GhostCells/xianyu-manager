@@ -64,6 +64,11 @@ const cloud={...imported,zip_name:'',zip_hash:'',zip_size:0,delivery_kind:'cloud
 ctx.renderShareVerification(cloud);assert(!el('confirmShare').disabled);
 assert(el('deliveryPackageStatus').textContent.includes('网盘资料交付（无ZIP）'));
 ctx.renderShareVerification({...cloud,delivery_issues:['DELIVERY_CLOUD_VERSION_UNCONFIRMED']});assert(el('confirmShare').disabled);
+ctx.state.catalogDelivery=true;
+ctx.renderShareVerification({...cloud,delivery_issues:[]});
+assert(el('confirmShare').hidden);assert(el('shareVerificationStatus').textContent.includes('无需人工核验'));
+ctx.renderShareVerification({...cloud,delivery_issues:['SHARE_MISSING']});
+assert(el('shareVerificationStatus').textContent.includes('资料尚未齐全'));
 })().catch(e=>{console.error(e);process.exitCode=1});
 """
     result = subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)

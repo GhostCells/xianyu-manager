@@ -41,7 +41,8 @@ runtime_policy = RuntimePolicy(settings.safe_mode, settings.prepare_mode, settin
                                settings.login_authorized, settings.egress_status_path,
                                reply_only=settings.reply_only, order_cutoff_at=settings.order_cutoff_at,
                                resident_reply=settings.resident_reply,
-                               mvp_fulfillment=settings.mvp_fulfillment, fulfillment_items=settings.fulfillment_items)
+                               mvp_fulfillment=settings.mvp_fulfillment, fulfillment_items=settings.fulfillment_items,
+                               catalog_delivery=settings.catalog_delivery)
 database = Database(settings.database_path, safe_mode=settings.safe_mode,
                     prepare_mode=settings.prepare_mode, runtime_account_id=settings.account_id)
 secret_store = SecretStore(settings.auto_reply_secret_path)
