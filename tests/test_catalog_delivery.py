@@ -58,6 +58,15 @@ def test_catalog_no_item_allowlist_but_cutoff_and_recovery_unchanged():
     with pytest.raises(ValueError):replace(p,order_cutoff_at='').require_fulfillment()
 
 
+def test_launcher_accepts_catalog_without_allowlist():
+    import runpy
+    launcher=runpy.run_path('scripts/run_preparation_service.py')
+    p=RuntimePolicy(account_id=2,mvp_fulfillment=True,catalog_delivery=True,order_cutoff_at='2026-09-08T00:00:00Z')
+    launcher['validate_policy'](p,mvp=True)
+    with pytest.raises(SystemExit):launcher['validate_policy'](replace(p,catalog_delivery=False),mvp=True)
+    with pytest.raises(ValueError):launcher['validate_policy'](replace(p,order_cutoff_at=''),mvp=True)
+
+
 def test_config_allows_empty_allowlist_only_in_explicit_catalog_mode(monkeypatch):
     from xianyu_manager.config import read_runtime_options
     for key,value in {'MVP_FULFILLMENT':'true','CATALOG_DELIVERY':'true','RESIDENT_REPLY':'true','REPLY_ONLY':'false','PREPARE_MODE':'false','ACCOUNT_ID':'2','LOGIN_AUTHORIZED':'true','FULFILLMENT_ITEMS':'','ORDER_CUTOFF_AT':'2026-09-08T00:00:00Z'}.items():

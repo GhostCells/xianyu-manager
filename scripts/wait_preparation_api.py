@@ -25,7 +25,7 @@ def main(*, reply_only=False, mvp=False):
                 assert body['fulfillment_enabled'] is True
                 assert body['order_recovery_enabled'] is False
                 assert body['order_cutoff_configured'] is True
-                assert body['fulfillment_items']
+                assert body['fulfillment_items'] or body.get('catalog_delivery') is True
             elif reply_only:
                 assert body['reply_only'] is True
                 assert body['fulfillment_enabled'] is False

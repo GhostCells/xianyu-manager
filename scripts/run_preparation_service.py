@@ -30,7 +30,7 @@ def validate_policy(policy, *, reply_only=False, mvp=False):
     # Starting the API never starts a browser. Login additionally requires a
     # fresh root manual-window capability in RuntimePolicy at every operation.
     if mvp:
-        if policy.mode != 'normal' or not policy.mvp_fulfillment or policy.account_id != 2 or policy.order_recovery_enabled or not policy.fulfillment_items:
+        if policy.mode != 'normal' or not policy.mvp_fulfillment or policy.account_id != 2 or policy.order_recovery_enabled or (not policy.fulfillment_items and not policy.catalog_delivery):
             raise SystemExit('MVP_POLICY_REQUIRED')
         from xianyu_manager.order_cutoff import utc_time
         utc_time(policy.order_cutoff_at, field='ORDER_CUTOFF')
