@@ -20,6 +20,19 @@ def test_owner_unit_reuses_existing_display_auth_without_business_secrets():
     assert 'NetworkNamespacePath=/run/netns/xianyu-business' in unit
 
 
+def test_readiness_wait_is_bounded_and_loopback_only():
+    import runpy
+    from unittest.mock import MagicMock, Mock
+    wait=runpy.run_path(str(Path(__file__).parents[1]/'scripts/wait_independent_chrome.py'))['wait_ready']
+    connect=Mock(side_effect=[OSError(),MagicMock()]);sleep=Mock()
+    wait(connect,sleep)
+    assert connect.call_count==2
+    connect.assert_called_with(('127.0.0.1',9222),timeout=1)
+    connect=Mock(side_effect=OSError())
+    with pytest.raises(SystemExit):wait(connect,sleep)
+    assert connect.call_count==30
+
+
 def fixture(profile):
     args = ['--user-data-dir='+str(profile.resolve()), '--remote-debugging-address=127.0.0.1',
             '--remote-debugging-port=9222']
