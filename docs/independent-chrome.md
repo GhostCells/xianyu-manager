@@ -8,6 +8,8 @@ Status: opt-in implementation, not evidence of production activation. Default re
 
 No database migration, cutoff change, device ID change, order replay, scheduler or recovery enablement is included. Existing business switches remain authoritative.
 
+If Chrome omits `--enable-automation`, command-line attestation falls back to the exact loopback listener socket inode, same runtime UID and independent-owner cgroup in procfs. Profile and sandbox flags are still checked; an unknown owner is refused. No automation flag is added to the production browser.
+
 ## Required deployment gates
 
 - Explicit production cutover approval, including protected CDP control access. Never forward CDP to Mac, host/public interfaces or the internet.

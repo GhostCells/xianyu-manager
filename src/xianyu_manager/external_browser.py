@@ -1,8 +1,37 @@
 """Attach to an already-owned Chrome; never launch or close its browser/context."""
 from pathlib import Path
+import os
 from .profile_lock import ProfileOwnerLock
 
 CDP_URL = 'http://127.0.0.1:9222'
+
+
+def local_listener_arguments(proc_root=Path('/proc')):
+    """Attest the exact loopback listener's process without changing Chrome flags."""
+    listeners=[]
+    for row in (proc_root/'net/tcp').read_text().splitlines()[1:]:
+        fields=row.split()
+        if fields[1].endswith(':2406') and fields[3]=='0A':
+            if fields[1]!='0100007F:2406':
+                raise RuntimeError('CDP_LISTENER_NOT_LOOPBACK')
+            listeners.append(fields[9])
+    if len(listeners)!=1:
+        raise RuntimeError('CDP_LISTENER_OWNER_AMBIGUOUS')
+    target='socket:['+listeners[0]+']'
+    owners=[]
+    for proc in proc_root.iterdir():
+        if not proc.name.isdigit():continue
+        try:
+            if proc.stat().st_uid!=os.getuid():continue
+            if not any(os.readlink(fd)==target for fd in (proc/'fd').iterdir()):continue
+            groups=(proc/'cgroup').read_text().splitlines()
+            if '0::/system.slice/xianyu-chrome-account2.service' not in groups:
+                raise RuntimeError('CDP_OWNER_SERVICE_MISMATCH')
+            owners.append((proc/'cmdline').read_bytes().decode().split('\0'))
+        except (FileNotFoundError,PermissionError,ProcessLookupError):continue
+    if len(owners)!=1:
+        raise RuntimeError('CDP_LISTENER_OWNER_AMBIGUOUS')
+    return owners[0]
 
 
 def validate_cdp_url(value):
@@ -47,8 +76,14 @@ class ExternalBrowserConnection:
                 self.endpoint, timeout=15000, no_defaults=True)
             channel = await self.browser.new_browser_cdp_session()
             try:
-                response = await channel.send('Browser.getBrowserCommandLine')
-                validate_browser_arguments(response.get('arguments', []), self.profile)
+                try:
+                    response = await channel.send('Browser.getBrowserCommandLine')
+                    arguments=response.get('arguments', [])
+                except Exception as exc:
+                    if 'Command line not returned because --enable-automation not set' not in str(exc):
+                        raise
+                    arguments=local_listener_arguments()
+                validate_browser_arguments(arguments, self.profile)
             finally:
                 await channel.detach()
             contexts = self.browser.contexts

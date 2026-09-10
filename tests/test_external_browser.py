@@ -96,6 +96,37 @@ def test_external_wrong_account_rejected(tmp_path):
     with pytest.raises(ValueError):ExternalBrowserConnection(tmp_path,CDP_URL,1)
 
 
+def test_cdp_without_automation_flag_uses_listener_attestation(tmp_path,monkeypatch):
+    from xianyu_manager import external_browser as mod
+    driver,browser,context,args=fixture(tmp_path)
+    channel=SimpleNamespace(send=AsyncMock(side_effect=RuntimeError(
+        'Command line not returned because --enable-automation not set.')),detach=AsyncMock())
+    browser.new_browser_cdp_session=AsyncMock(return_value=channel)
+    monkeypatch.setattr(mod,'local_listener_arguments',lambda:args)
+    async def run():
+        conn=ExternalBrowserConnection(tmp_path,CDP_URL,2)
+        assert (await conn.connect(AsyncMock(return_value=driver)))[0] is context
+        await conn.disconnect()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('group,address,accept',[
+    ('xianyu-chrome-account2.service','0100007F',True),
+    ('other.service','0100007F',False),
+    ('xianyu-chrome-account2.service','00000000',False)])
+def test_listener_identity_checks_process_cgroup(tmp_path,group,address,accept):
+    from xianyu_manager.external_browser import local_listener_arguments
+    (tmp_path/'net').mkdir()
+    (tmp_path/'net/tcp').write_text('header\n0: '+address+':2406 00000000:0000 0A 0 0 0 0 0 42\n')
+    proc=tmp_path/'123';(proc/'fd').mkdir(parents=True)
+    (proc/'fd/7').symlink_to('socket:[42]')
+    (proc/'cgroup').write_text('0::/system.slice/'+group+'\n')
+    (proc/'cmdline').write_bytes(b'chrome\0--user-data-dir=/example\0')
+    if accept:assert local_listener_arguments(tmp_path)[0]=='chrome'
+    else:
+        with pytest.raises(RuntimeError):local_listener_arguments(tmp_path)
+
+
 def test_egress_attests_both_units_only_when_root_binding_valid(tmp_path,monkeypatch):
     from xianyu_manager import egress_control as c
     p=tmp_path/'binding.json';p.touch();monkeypatch.setattr(c,'CHROME_BINDING',p)
