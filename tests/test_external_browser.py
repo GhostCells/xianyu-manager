@@ -11,6 +11,15 @@ from xianyu_manager.session import BrowserSessionManager
 from xianyu_manager.database import Database
 
 
+def test_owner_unit_reuses_existing_display_auth_without_business_secrets():
+    unit=(Path(__file__).parents[1]/'docs/xianyu-chrome-account2.service.example').read_text()
+    assert 'Environment=DISPLAY=:99' in unit
+    assert 'Environment=XAUTHORITY=/var/lib/xianyu-runtime/Xauthority' in unit
+    assert 'EnvironmentFile=' not in unit
+    assert 'BindsTo=xianyu-isolated-prepare' not in unit
+    assert 'NetworkNamespacePath=/run/netns/xianyu-business' in unit
+
+
 def fixture(profile):
     args = ['--user-data-dir='+str(profile.resolve()), '--remote-debugging-address=127.0.0.1',
             '--remote-debugging-port=9222']

@@ -13,6 +13,7 @@ NetworkNamespacePath=/run/netns/xianyu-business
 WorkingDirectory=/opt/xianyu-manager
 Environment=PYTHONPATH=/opt/xianyu-manager/src
 Environment=DISPLAY=:99
+Environment=XAUTHORITY=/var/lib/xianyu-runtime/Xauthority
 ExecStartPre=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/wait_preparation_display.py
 ExecStart=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/run_independent_chrome.py
 RuntimeDirectory=xianyu-chrome-account2
