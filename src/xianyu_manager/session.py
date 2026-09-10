@@ -69,7 +69,11 @@ class BrowserSessionManager:
         *,
         browser_headless: bool = False,
         runtime_policy: RuntimePolicy = PROCESS_POLICY,
+        browser_cdp_url: str = '',
     ) -> None:
+        from .external_browser import validate_cdp_url
+        self.browser_cdp_url = validate_cdp_url(browser_cdp_url)
+        self._external_connection = None
         self.runtime_policy = runtime_policy
         self.profiles_dir = profiles_dir
         if not runtime_policy.safe_mode:
@@ -227,6 +231,13 @@ class BrowserSessionManager:
         from playwright.async_api import async_playwright
 
         profile_dir = self.profile_dir(account_id)
+        if self.browser_cdp_url:
+            from .external_browser import ExternalBrowserConnection
+            connection = ExternalBrowserConnection(profile_dir, self.browser_cdp_url, account_id)
+            self._context, self._page = await connection.connect(lambda: async_playwright().start())
+            self._external_connection = connection
+            self._account_id = account_id
+            return
         profile_lock = ProfileOwnerLock(profile_dir)
         profile_lock.acquire()
         self._profile_lock = profile_lock
@@ -324,11 +335,12 @@ class BrowserSessionManager:
             try:
                 await self._launch_visible_browser(account_id)
                 try:
-                    await self._page.goto(
-                        GOOFISH_LOGIN_TARGET,
-                        wait_until="domcontentloaded",
-                        timeout=60_000,
-                    )
+                    if not self.browser_cdp_url:
+                        await self._page.goto(
+                            GOOFISH_LOGIN_TARGET,
+                            wait_until="domcontentloaded",
+                            timeout=60_000,
+                        )
                 except Exception:
                     pass
                 return self._context
@@ -415,11 +427,12 @@ class BrowserSessionManager:
             try:
                 await self._launch_visible_browser(account_id)
                 try:
-                    await self._page.goto(
-                        GOOFISH_HOME if self.runtime_policy.prepare_mode else GOOFISH_LOGIN_TARGET,
-                        wait_until="domcontentloaded",
-                        timeout=60_000,
-                    )
+                    if not self.browser_cdp_url:
+                        await self._page.goto(
+                            GOOFISH_HOME if self.runtime_policy.prepare_mode else GOOFISH_LOGIN_TARGET,
+                            wait_until="domcontentloaded",
+                            timeout=60_000,
+                        )
                 except Exception:
                     # A slow page can still be usable for manual QR login.
                     pass
@@ -517,6 +530,8 @@ class BrowserSessionManager:
             profile_lock: ProfileOwnerLock | None = None
             shared_context = False
             try:
+                if self.browser_cdp_url and self._context is None:
+                    await self._launch_visible_browser(account_id)
                 if self._context is not None:
                     if self._account_id != account_id:
                         raise RuntimeError("另一个账号正在使用专用浏览器")
@@ -652,6 +667,15 @@ class BrowserSessionManager:
                 await monitor
             except asyncio.CancelledError:
                 pass
+        if self._external_connection is not None:
+            connection, self._external_connection = self._external_connection, None
+            try:
+                await connection.disconnect()
+            finally:
+                self._context = None
+                self._page = None
+                self._playwright = None
+                self._account_id = None
         if self._context is not None:
             try:
                 await self._context.close()

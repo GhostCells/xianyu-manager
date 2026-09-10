@@ -32,6 +32,7 @@ class Settings:
     mvp_fulfillment: bool = False
     catalog_delivery: bool = False
     fulfillment_items: tuple[str, ...] = ()
+    browser_cdp_url: str = ''
 
 
 def _parse_bool(value: str, *, name: str, default: bool) -> bool:
@@ -116,6 +117,7 @@ def load_settings() -> Settings:
         static_dir=manager_root / "static",
         browser_profiles_dir=data_dir / "browser-profiles",
         browser_executable=find_browser_executable(),
+        browser_cdp_url=read_browser_cdp_url(),
         browser_headless=_parse_bool(
             os.environ.get("XIANYU_BROWSER_HEADLESS", ""),
             name="XIANYU_BROWSER_HEADLESS",
@@ -126,6 +128,14 @@ def load_settings() -> Settings:
         safe_mode=safe_mode,
         **policy_options,
     )
+
+
+def read_browser_cdp_url() -> str:
+    from .external_browser import validate_cdp_url
+    value = validate_cdp_url(os.environ.get('XIANYU_MANAGER_BROWSER_CDP_URL', '').strip())
+    if value and (sys.platform != 'linux' or os.environ.get('XIANYU_MANAGER_ACCOUNT_ID') != '2'):
+        raise ValueError('EXTERNAL_BROWSER_REQUIRES_LINUX_ACCOUNT_2')
+    return value
 
 
 def read_safe_mode() -> bool:

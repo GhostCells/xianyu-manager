@@ -26,6 +26,8 @@ UNIT = "xianyu-isolated-prepare.service"
 STATE = Path("/run/xianyu-egress/status.json")
 APPROVAL = Path("/etc/xianyu-egress/approval.json")
 LATCH = Path("/var/lib/xianyu-egress/blocked.json")
+CHROME_BINDING = Path('/etc/xianyu-egress/independent-chrome.json')
+CHROME_UNIT = 'xianyu-chrome-account2.service'
 LEASE_SECONDS = 30
 STATUS_SECONDS = 20
 
@@ -198,30 +200,38 @@ def offline_sandbox_namespace(proc):
     return names == {'lo'}
 
 
-def runtime_verified():
+def _unit_runtime_verified(unit, *, required=True):
     import pwd  # Linux updater only; keep legacy Windows policy imports portable.
 
     props = dict(
         line.split("=", 1)
         for line in run(
-            "systemctl", "show", UNIT, "-p", "MainPID", "-p", "ControlGroup"
+            "systemctl", "show", unit, "-p", "MainPID", "-p", "ControlGroup"
         ).splitlines()
     )
     main = int(props["MainPID"])
     if main <= 1:
-        return False
+        # An independently owned Chrome may survive an entirely stopped manager.
+        # A stopping manager with remaining processes must still be checked.
+        if required or main != 0:
+            return False
+        if not props.get('ControlGroup'):
+            return True
     ns = Path("/run/netns") / NAMESPACE
     inode = ns.stat().st_ino
     group = props["ControlGroup"]
-    if not group.startswith("/system.slice/"):
+    if group != '/system.slice/' + unit:
         return False
     groupdir = Path("/sys/fs/cgroup" + group)
     pids = {p for f in groupdir.rglob("cgroup.procs") for p in f.read_text().split()}
     uid = pwd.getpwnam("xianyu-runtime").pw_uid
-    if uid in (0, pwd.getpwnam("ubuntu").pw_uid) or str(main) not in pids:
+    if uid in (0, pwd.getpwnam("ubuntu").pw_uid):
         return False
-    if (Path('/proc') / str(main) / 'ns/net').stat().st_ino != inode:
-        return False
+    if main > 1:
+        if str(main) not in pids:
+            return False
+        if (Path('/proc') / str(main) / 'ns/net').stat().st_ino != inode:
+            return False
     for pid in pids:
         proc = Path("/proc") / pid
         if proc.stat().st_uid != uid:
@@ -229,6 +239,16 @@ def runtime_verified():
         if (proc / "ns/net").stat().st_ino != inode and not offline_sandbox_namespace(proc):
             return False
     return True
+
+
+def runtime_verified():
+    if not CHROME_BINDING.exists():
+        return _unit_runtime_verified(UNIT)
+    binding = read_root_json(CHROME_BINDING)
+    if binding != {'schema_version': 1, 'account_id': 2, 'unit': CHROME_UNIT}:
+        return False
+    return (_unit_runtime_verified(CHROME_UNIT)
+            and _unit_runtime_verified(UNIT, required=False))
 
 
 def observe(*, probe_public=True):

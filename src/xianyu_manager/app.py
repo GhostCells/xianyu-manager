@@ -52,6 +52,7 @@ session_manager = BrowserSessionManager(
     database,
     browser_headless=settings.browser_headless,
     runtime_policy=runtime_policy,
+    browser_cdp_url=settings.browser_cdp_url,
 )
 delivery_service = DeliveryService(
     settings.browser_profiles_dir,
@@ -116,7 +117,8 @@ async def lifespan(_: FastAPI):
                     if recovery.blocked:
                         recovery.block()
                 elif (recovery_allowed(runtime_policy, delivery_enabled=bool(
-                          (database.get_account(runtime_policy.account_id) or {}).get('delivery_enabled')))
+                          (database.get_account(runtime_policy.account_id) or {}).get('delivery_enabled')),
+                          external_browser=bool(settings.browser_cdp_url))
                       and (resident is None or resident.done())
                       and recovery.ready(checked_at=raw['checked_at'], now=asyncio.get_running_loop().time())):
                     runtime_policy._state['egress_latched'] = False

@@ -24,7 +24,8 @@ class RecoveryGate:
         return True
 
 
-def recovery_allowed(policy, *, delivery_enabled=False):
+def recovery_allowed(policy, *, delivery_enabled=False, external_browser=False):
     return (policy.resident_reply and policy.mode == 'normal'
             and policy.account_id == 2 and not policy.order_recovery_enabled
-            and (policy.reply_only or (policy.mvp_fulfillment and not delivery_enabled)))
+            and (policy.reply_only or (policy.mvp_fulfillment and
+                 (not delivery_enabled or external_browser))))

@@ -1,0 +1,46 @@
+[Unit]
+Description=Account 2 independent persistent Chrome
+BindsTo=xianyu-network.service xianyu-preparation-display.service
+After=xianyu-network.service xianyu-preparation-display.service
+ConditionPathExists=/run/netns/xianyu-business
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+User=xianyu-runtime
+Group=xianyu-api
+NetworkNamespacePath=/run/netns/xianyu-business
+WorkingDirectory=/opt/xianyu-manager
+Environment=PYTHONPATH=/opt/xianyu-manager/src
+Environment=DISPLAY=:99
+ExecStartPre=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/wait_preparation_display.py
+ExecStart=/opt/xianyu-manager/.venv/bin/python /opt/xianyu-manager/scripts/run_independent_chrome.py
+RuntimeDirectory=xianyu-chrome-account2
+RuntimeDirectoryMode=0750
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=45
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=user pid net
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/xianyu-runtime/candidate-20260907/data/browser-profiles/google-chrome /run/xianyu-chrome-account2
+BindReadOnlyPaths=/etc/xianyu-egress/resolv.conf:/etc/resolv.conf
+TemporaryFileSystem=/tmp:mode=1777 /run
+BindReadOnlyPaths=/tmp/.X11-unix/X99:/tmp/.X11-unix/X99 /run/xianyu-egress:/run/xianyu-egress
+BindPaths=/run/xianyu-chrome-account2:/run/xianyu-chrome-account2
+InaccessiblePaths=/var/tmp
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
