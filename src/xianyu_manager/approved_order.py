@@ -44,6 +44,10 @@ def require_fresh_order(database, account_id, order_id, buyer_id, item_id, *,
 
 
 def require_current_package(library, product):
+    if product.get('delivery_kind','zip') == 'cloud':
+        from .delivery_package import check_registered_cloud
+        check_registered_cloud(library, product)
+        return
     root = Path(library).resolve(strict=True)
     directory = (root / product['dir_name']).resolve(strict=True)
     if directory == root or not directory.is_relative_to(root):

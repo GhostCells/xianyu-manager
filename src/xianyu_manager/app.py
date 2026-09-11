@@ -61,6 +61,7 @@ delivery_service = DeliveryService(
     secret_store,
     session_manager=session_manager,
     runtime_policy=runtime_policy,
+    product_library=settings.product_library,
 )
 
 

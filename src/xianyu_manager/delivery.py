@@ -528,6 +528,7 @@ class DeliveryService:
         notifier: WindowsNotifier | None = None,
         session_manager: Any | None = None,
         runtime_policy: RuntimePolicy = PROCESS_POLICY,
+        product_library: Path | None = None,
     ) -> None:
         self.runtime_policy = runtime_policy
         self.profiles_dir = profiles_dir
@@ -546,6 +547,8 @@ class DeliveryService:
         self._approved_order_lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
         self._event_tasks: set[asyncio.Task[None]] = set()
+        from .live_group_watch import LiveGroupWatch
+        self._live_group_watch = LiveGroupWatch(self, product_library)
         self._reply_tasks: dict[str, PendingAutoReply] = {}
         self._stop_event = asyncio.Event()
         self._pending_acks: dict[str, asyncio.Future[Any]] = {}
@@ -1059,6 +1062,7 @@ class DeliveryService:
             for event_task in list(self._event_tasks):
                 event_task.cancel()
             self._event_tasks.clear()
+            await self._live_group_watch.stop()
             for pending_reply in list(self._reply_tasks.values()):
                 pending_reply.task.cancel()
             self._reply_tasks.clear()
@@ -1194,6 +1198,7 @@ class DeliveryService:
                 except asyncio.TimeoutError:
                     retry_delay = min(retry_delay * 2, 30)
             finally:
+                await self._live_group_watch.stop()
                 self._runtime_cookie_map = None
                 self._runtime_request_context = None
                 self._runtime_websocket = None
@@ -1565,6 +1570,11 @@ class DeliveryService:
                 if (group_stage in {'waiting', 'ready'} or is_paid_event(event)) and not self.runtime_policy.fulfillment_enabled:
                     continue
                 if group_stage == "waiting":
+                    if self.runtime_policy.mvp_fulfillment:
+                        self._live_group_watch.schedule(
+                            account_id, websocket, extract_order_id(event), extract_item_id(event),
+                            extract_buyer_id(event, seller_id), extract_event_timestamp_ms(event))
+                        continue
                     task = asyncio.create_task(
                         self._process_group_waiting_event(
                             account_id, seller_id, cookie_map, event
