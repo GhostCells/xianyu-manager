@@ -13,3 +13,12 @@ This is not order recovery. The existing MVP historical reconcile prohibition is
 - Nothing schedules this action on startup. Enabling delivery does not replay a consumed payment event.
 
 Deployment: keep actual delivery off through reload, restore the existing account session, then enable only the approved item scope. Run preview only and wait for the user's separate execute approval.
+# Missing local conversation
+
+Preview remains read-only. If the exact account/buyer/item has no local conversation,
+it returns `conversation_resolution_required=true` and `precheck_passed=false` after
+the other eligibility checks. Only explicitly approved execution may call the existing
+platform conversation API with those exact participants and item. It rechecks prior
+orders/outbound records, conversation conflicts and manual takeover before reusing the
+normal payment/claim/send chain. Resolution failure never sends; it does not scan or
+recover other orders, or fabricate a local chat message.

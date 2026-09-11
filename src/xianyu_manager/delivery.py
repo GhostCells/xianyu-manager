@@ -712,15 +712,31 @@ class DeliveryService:
             if product is None or delivery_issues(product):
                 raise ValueError('APPROVED_ORDER_PRODUCT_NOT_QUALIFIED')
             require_current_package(library, product)
-            chat_id = require_fresh_order(self.database, account_id, order_id, buyer_id, item_id)
+            chat_id = require_fresh_order(self.database, account_id, order_id, buyer_id, item_id,
+                                         allow_missing_chat=True)
             safety = self.database.check_automation_outbound(account_id, 'delivery')
             if not safety['allowed']:
                 raise ValueError('APPROVED_ORDER_SAFETY_BLOCKED')
             result = {'account_id': account_id, 'order_short_id': order_id[-6:], 'item_id': item_id,
                       'product': product['dir_name'], 'paid_time_utc': payment.isoformat(),
-                      'platform_status': row['order_status'], 'precheck_passed': True, 'executed': False}
+                      'platform_status': row['order_status'], 'precheck_passed': chat_id is not None,
+                      'conversation_resolution_required': chat_id is None, 'executed': False}
             if not execute:
                 return result
+            if chat_id is None:
+                # Only an explicitly approved execution may get/create the exact
+                # buyer/seller/item conversation. Preview never writes or creates it.
+                try:
+                    resolved = await self._create_chat(
+                        self._runtime_websocket, buyer_id, self._runtime_seller_id, item_id)
+                except Exception as exc:
+                    raise ValueError('APPROVED_ORDER_CHAT_RESOLUTION_FAILED') from exc
+                if self._status != 'listening' or self._account_id != account_id:
+                    raise ValueError('APPROVED_ORDER_SESSION_NOT_READY')
+                chat_id = require_fresh_order(self.database, account_id, order_id, buyer_id, item_id,
+                                             resolved_chat_id=resolved)
+                result['precheck_passed'] = True
+                result['conversation_resolution_required'] = False
             # No alternative claim/send implementation; all existing gates run again.
             await self._process_paid_event(
                 self._runtime_websocket, account_id, self._runtime_seller_id, self._runtime_cookie_map,

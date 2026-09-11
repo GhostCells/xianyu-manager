@@ -4,7 +4,8 @@ import re
 from pathlib import Path
 
 
-def require_fresh_order(database, account_id, order_id, buyer_id, item_id):
+def require_fresh_order(database, account_id, order_id, buyer_id, item_id, *,
+                        allow_missing_chat=False, resolved_chat_id=None):
     with database.connect() as connection:
         # Refuse even a prior failed/uncertain attempt; never turn this into recovery.
         if connection.execute('SELECT 1 FROM orders WHERE xianyu_order_id=?', (order_id,)).fetchone():
@@ -18,11 +19,25 @@ def require_fresh_order(database, account_id, order_id, buyer_id, item_id):
             'SELECT chat_id FROM chat_sessions WHERE account_id=? AND buyer_id=? AND listing_item_id=?',
             (account_id, buyer_id, item_id),
         ).fetchall()
-        if len(rows) != 1:
+        if len(rows) > 1:
             raise ValueError('APPROVED_ORDER_CHAT_NOT_UNIQUE')
-        chat_id = rows[0]['chat_id']
+        if not rows and resolved_chat_id is None:
+            if not allow_missing_chat:
+                raise ValueError('APPROVED_ORDER_CHAT_NOT_UNIQUE')
+            if not database._account_can_deliver(connection, account_id, ''):
+                raise ValueError('APPROVED_ORDER_ACCOUNT_OR_MANUAL_BLOCK')
+            return None
+        chat_id = rows[0]['chat_id'] if rows else resolved_chat_id
+        if resolved_chat_id is not None and chat_id != resolved_chat_id:
+            raise ValueError('APPROVED_ORDER_CHAT_CONFLICT')
         if not re.fullmatch(r'[0-9]{5,}', str(chat_id)):
             raise ValueError('APPROVED_ORDER_CHAT_INVALID')
+        existing = connection.execute(
+            'SELECT buyer_id,listing_item_id FROM chat_sessions WHERE account_id=? AND chat_id=?',
+            (account_id,chat_id),
+        ).fetchone()
+        if existing and (existing['buyer_id'] != buyer_id or existing['listing_item_id'] != item_id):
+            raise ValueError('APPROVED_ORDER_CHAT_CONFLICT')
         if not database._account_can_deliver(connection, account_id, chat_id):
             raise ValueError('APPROVED_ORDER_ACCOUNT_OR_MANUAL_BLOCK')
         return chat_id

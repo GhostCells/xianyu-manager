@@ -63,6 +63,51 @@ def test_preview_is_read_only_and_targeted(ready, db):
     assert not s._event_tasks
 
 
+def test_missing_chat_preview_never_creates_conversation(ready,db,monkeypatch):
+    s,a,lib,_,_=ready
+    with db.connect() as c:
+        c.execute('DELETE FROM chat_sessions')
+    create=AsyncMock(return_value='667788');monkeypatch.setattr(s,'_create_chat',create)
+    with db.connect() as c:before='\n'.join(c.iterdump())
+    result=asyncio.run(s.approved_order(a,ORDER,library=lib))
+    assert not result['precheck_passed'] and result['conversation_resolution_required']
+    create.assert_not_awaited();s._send_text.assert_not_awaited()
+    with db.connect() as c:assert '\n'.join(c.iterdump())==before
+
+
+def test_missing_chat_execute_resolves_exact_participants_and_sends_once(ready,db,monkeypatch):
+    s,a,lib,_,_=ready
+    with db.connect() as c:c.execute('DELETE FROM chat_sessions')
+    create=AsyncMock(return_value='667788');monkeypatch.setattr(s,'_create_chat',create)
+    result=asyncio.run(s.approved_order(a,ORDER,library=lib,execute=True))
+    assert result['delivery_status']=='delivered'
+    create.assert_awaited_once_with(s._runtime_websocket,BUYER,'987654321',ITEM)
+    assert db.get_order(ORDER)['chat_id']=='667788'
+    assert db.get_order(ORDER)['delivery_attempts']==1
+    with pytest.raises(ValueError,match='ALREADY_RECORDED'):
+        asyncio.run(s.approved_order(a,ORDER,library=lib,execute=True))
+    create.assert_awaited_once();s._send_text.assert_awaited_once()
+
+
+@pytest.mark.parametrize('case',['timeout','invalid','conflict','race_order','manual'])
+def test_chat_resolution_failures_never_send(ready,db,monkeypatch,case):
+    s,a,lib,_,_=ready
+    with db.connect() as c:c.execute('DELETE FROM chat_sessions')
+    async def create(*args):
+        if case=='timeout':raise asyncio.TimeoutError()
+        if case=='invalid':return 'bad'
+        if case=='race_order':
+            db.upsert_paid_order(order_id=ORDER,account_id=a,product_dir_name='01-test',listing_item_id=ITEM,buyer_id=BUYER,chat_id='667788',event_fingerprint='race')
+        if case in ('conflict','manual'):
+            with db.connect() as c:
+                c.execute('INSERT INTO chat_sessions(account_id,chat_id,buyer_id,listing_item_id,manual_takeover_until) VALUES (?,?,?,?,?)',
+                    (a,'667788','other' if case=='conflict' else BUYER,ITEM,'2999-01-01' if case=='manual' else None))
+        return '667788'
+    monkeypatch.setattr(s,'_create_chat',create)
+    with pytest.raises(ValueError):asyncio.run(s.approved_order(a,ORDER,library=lib,execute=True))
+    s._send_text.assert_not_awaited()
+
+
 def test_execute_reuses_real_claim_and_send_once(ready, db):
     s, a, lib, row, fetch = ready
     async def run():
