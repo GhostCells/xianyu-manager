@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Xianyu account 2 health every 30 seconds
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=30
+AccuracySec=1
+Unit=xianyu-mail-watch.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+[Unit]
+Description=Read-only Xianyu account 2 mail monitor
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/xianyu-mail-watch/mail_watch.py
+User=root
+UMask=0077
+StateDirectory=xianyu-mail-watch
+StateDirectoryMode=0700
+TimeoutStartSec=90
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/etc/xianyu-notifications
