@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>七月账号商品与发货</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260909-upload-close" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260915-novnc-entry" />
   </head>
   <body>
     <header class="topbar">
@@ -24,6 +24,16 @@
           <div class="status-heading"><span id="sessionDot" class="status-dot"></span><div><small>账号连接</small><h2 id="sessionTitle">正在读取…</h2></div></div>
           <p id="sessionMessage">登录信息只保存在本机专用浏览器目录。</p>
           <p id="sessionMeta" class="status-meta"></p>
+          <div class="panel-actions" aria-label="云端远程画面">
+            <a class="secondary remote-view-link" href="http://127.0.0.1:18767/vnc.html" target="_blank" rel="noopener noreferrer">打开云端画面 ↗</a>
+          </div>
+          <details class="compact-settings remote-view-helper" id="remoteViewHelper">
+            <summary>连接助手 · 画面打不开时点这里</summary>
+            <p class="status-meta">只连接Mac图形隧道，不会重启Chrome或开启发货。下方无法显示时，请先双击Mac上的“打开云端画面.command”，再点“重新载入助手”。</p>
+            <button type="button" class="secondary" id="reloadViewHelper">重新载入助手</button>
+            <iframe id="remoteViewFrame" title="本机noVNC连接助手" data-src="http://127.0.0.1:18768/" referrerpolicy="no-referrer" loading="lazy"></iframe>
+          </details>
+          <p class="status-meta">图形入口连通不代表闲鱼已登录；实际消息连接请看订单监听与AI售前客服状态。此入口用于当前Mac的本地SSH隧道。</p>
           <details class="compact-settings"><summary>登录与会话维护</summary>
           <div class="panel-actions">
             <button id="startBinding" class="primary" type="button">登录七月账号</button>
@@ -274,5 +284,6 @@
     </dialog>
     <script src="/static/app.js?v=20260909-special-status" defer></script>
     <script src="/static/product-import.js?v=20260909-cloud-delivery" defer></script>
+    <script src="/static/remote-view.js?v=20260915" defer></script>
   </body>
 </html>

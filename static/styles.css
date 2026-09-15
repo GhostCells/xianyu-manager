@@ -257,3 +257,6 @@ label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
   .delivery-step { padding: 14px; }
   .delivery-step button, #productImportForm button { width: 100%; }
 }
+.remote-view-link { display: inline-block; padding: 12px 16px; border-radius: 12px; background: #edf2f0; color: #173b32; font-weight: 700; text-decoration: none; }
+.remote-view-link:focus-visible { outline: 3px solid #078362; outline-offset: 3px; }
+#remoteViewFrame { display: block; width: 100%; height: 700px; border: 1px solid #dce8e2; border-radius: 14px; margin-top: 12px; background: #f2f6f4; }
