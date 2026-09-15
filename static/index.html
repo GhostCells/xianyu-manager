@@ -18,6 +18,7 @@
     </header>
 
     <main>
+      <p id="connectionReadNotice" role="status" class="status-meta" hidden></p>
       <p id="inventoryRefreshStatus" role="status">平台在售状态待刷新；旧记录不代表实时在售。</p>
       <section class="dashboard-grid">
         <section id="sessionPanel" class="status-panel" aria-live="polite">
@@ -283,7 +284,7 @@
         <div class="import-dialog-footer"><button id="leaveProductImport" type="button" class="secondary">关闭（保留上传记录）</button><p id="importCloseHint" class="knowledge-hint"></p></div>
       </form>
     </dialog>
-    <script src="/static/app.js?v=20260915-recovery" defer></script>
+    <script src="/static/app.js?v=20260915-bounded-reads" defer></script>
     <script src="/static/product-import.js?v=20260909-cloud-delivery" defer></script>
     <script src="/static/remote-view.js?v=20260915" defer></script>
   </body>

@@ -1,3 +1,37 @@
+// Bound read requests through slow SSH links, including response-body transfer.
+function createReadClient(fetcher, timeoutMs = 20000) {
+  const pending = new Map();
+  return async function read(url) {
+    if (!pending.has(url)) {
+      const work = (async () => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetcher(url, {signal: controller.signal});
+          const body = await response.arrayBuffer();
+          return new Response(body, {status: response.status, statusText: response.statusText, headers: response.headers});
+        } catch (error) {
+          if (controller.signal.aborted) throw new Error("后台连接超时，请稍后重试；当前显示可能是旧状态。");
+          throw error;
+        } finally { clearTimeout(timer); }
+      })();
+      pending.set(url, work);
+      work.finally(() => { if (pending.get(url) === work) pending.delete(url); }).catch(() => {});
+    }
+    return (await pending.get(url)).clone();
+  };
+}
+const fetchRead = createReadClient((...args) => fetch(...args));
+function pollRead(task, interval) {
+  let busy = false;
+  return setInterval(async () => {
+    if (busy || document.hidden) return;
+    busy = true;
+    try { await task(); }
+    catch (error) { const note = document.getElementById("connectionReadNotice"); if (note) {note.hidden = false; note.textContent = error.message;} }
+    finally { busy = false; }
+  }, interval);
+}
 const state = {
   products: [], listings: [], account: null, session: null, sessionTimer: null,
   delivery: null, deliveryTimer: null, autoReply: null, autoReplyTimer: null,
@@ -154,7 +188,7 @@ function render() { renderSummary(); renderProducts(); }
 
 const pendingSessionStatuses = new Set(["starting", "waiting_scan", "detected"]);
 function stopSessionPolling() { if (state.sessionTimer) clearInterval(state.sessionTimer); state.sessionTimer = null; }
-function startSessionPolling() { stopSessionPolling(); state.sessionTimer = setInterval(loadSession, 2000); }
+function startSessionPolling() { stopSessionPolling(); state.sessionTimer = pollRead(loadSession, 5000); }
 
 function showSessionFailure(message) {
   const blocked = /EGRESS_|PUBLIC_ADDRESS_REVIEW_REQUIRED|WRONG_EXIT_NODE/.test(String(message));
@@ -197,7 +231,7 @@ function renderSession() {
 }
 
 async function loadSession() {
-  const response = await fetch("/api/session");
+  const response = await fetchRead("/api/session");
   if (!response.ok) {
     const failure = await response.json().catch(() => ({}));
     showSessionFailure(state.egressBlocked ? "EGRESS_BLOCKED_REVIEW_REQUIRED" : (failure.detail || failure.error_code || "读取账号连接状态失败"));
@@ -209,7 +243,7 @@ async function loadSession() {
 
 const activeDeliveryStatuses = new Set(["starting", "cooldown", "authenticating", "connecting", "listening", "reconnecting"]);
 function stopDeliveryPolling() { if (state.deliveryTimer) clearInterval(state.deliveryTimer); state.deliveryTimer = null; }
-function startDeliveryPolling() { if (!state.deliveryTimer) state.deliveryTimer = setInterval(loadDelivery, 3000); }
+function startDeliveryPolling() { if (!state.deliveryTimer) state.deliveryTimer = pollRead(loadDelivery, 10000); }
 function maskOrderId(value) { const text = String(value || ""); return text ? `…${text.slice(-6)}` : "未知订单"; }
 
 function renderOrders(orders) {
@@ -262,7 +296,7 @@ function renderDelivery() {
 }
 
 async function loadDelivery() {
-  const response = await fetch("/api/delivery");
+  const response = await fetchRead("/api/delivery");
   if (!response.ok) throw new Error("读取自动发货状态失败");
   state.delivery = await response.json();
   renderDelivery();
@@ -362,12 +396,12 @@ function renderAutoReply() {
   renderAutoReplyTestProducts();
   renderAutoReplyRecords(data.records || []);
   if (!state.autoReplyTimer) {
-    state.autoReplyTimer = setInterval(() => loadAutoReply(false).catch(() => {}), 5000);
+    state.autoReplyTimer = pollRead(() => loadAutoReply(false), 10000);
   }
 }
 
 async function loadAutoReply(fillForm = false) {
-  const response = await fetch("/api/auto-reply");
+  const response = await fetchRead("/api/auto-reply");
   if (!response.ok) throw new Error("读取自动回复状态失败");
   state.autoReply = await response.json();
   if (fillForm) state.autoReplyFormInitialized = false;
@@ -489,12 +523,12 @@ function renderSafety() {
     : "尚无启动检查记录；下次启动系统时会自动生成。";
   el("resetCircuit").hidden = !open;
   if (!state.safetyTimer) {
-    state.safetyTimer = setInterval(() => loadSafety(false).catch(() => {}), 5000);
+    state.safetyTimer = pollRead(() => loadSafety(false), 15000);
   }
 }
 
 async function loadSafety(fillForm = false) {
-  const response = await fetch("/api/automation-safety");
+  const response = await fetchRead("/api/automation-safety");
   if (!response.ok) throw new Error("读取无人值守保护状态失败");
   state.safety = await response.json();
   if (fillForm) state.safetyFormInitialized = false;
@@ -594,7 +628,7 @@ async function sessionAction(action) {
 }
 
 async function loadProducts() {
-  const [accountsResponse, productsResponse, listingsResponse] = await Promise.all([fetch("/api/accounts"), fetch("/api/products"), state.safeMode ? Promise.resolve(new Response("[]")) : fetch("/api/listings")]);
+  const [accountsResponse, productsResponse, listingsResponse] = await Promise.all([fetchRead("/api/accounts"), fetchRead("/api/products"), state.safeMode ? Promise.resolve(new Response("[]")) : fetchRead("/api/listings")]);
   if (!accountsResponse.ok || !productsResponse.ok || !listingsResponse.ok) throw new Error("读取商品失败");
   const accounts = await accountsResponse.json();
   state.account = state.prepareMode ? accounts.find(a => a.id === state.runtimeAccountId) || null : accounts.find((account) => account.is_active) || (state.safeMode ? null : accounts[0]) || null;
@@ -1040,7 +1074,7 @@ el("autoReplyRecords").addEventListener("click", (event) => {
 });
 
 async function initializePage() {
-  const response = await fetch("/api/health");
+  const response = await fetchRead("/api/health");
   if (!response.ok) throw new Error("读取 API 状态失败");
   const health = await response.json();
   state.egressBlocked = health.egress?.ready === false;
@@ -1127,5 +1161,7 @@ el('manualReviewForm').addEventListener('submit', async event => {
 });
 
 initializePage().catch((error) => {
+  const note = el("connectionReadNotice"); note.hidden = false; note.textContent = error.message;
+  for (const id of ["sessionTitle", "deliveryTitle", "autoReplyTitle", "safetyTitle"]) { if (el(id).textContent.includes("正在读取")) el(id).textContent = "连接超时，请稍后刷新"; }
   el("productList").innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
 });
