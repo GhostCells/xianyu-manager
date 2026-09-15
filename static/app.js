@@ -156,9 +156,17 @@ const pendingSessionStatuses = new Set(["starting", "waiting_scan", "detected"])
 function stopSessionPolling() { if (state.sessionTimer) clearInterval(state.sessionTimer); state.sessionTimer = null; }
 function startSessionPolling() { stopSessionPolling(); state.sessionTimer = setInterval(loadSession, 2000); }
 
+function showSessionFailure(message) {
+  const blocked = /EGRESS_|PUBLIC_ADDRESS_REVIEW_REQUIRED|WRONG_EXIT_NODE/.test(String(message));
+  el("sessionTitle").textContent = blocked ? "业务出口连接异常" : "账号连接需要处理";
+  el("sessionMessage").textContent = blocked ? "请展开上方连接助手，点击“检查并恢复业务连接”。出口恢复前无需重新登录。" : String(message);
+  el("startBinding").disabled = blocked;
+}
+
 function renderSession() {
   const session = state.session;
   if (!session) return;
+  el("startBinding").disabled = false;
   const browserLabel = String(session.browser_name || "").toLowerCase().includes("chrome") ? "Chrome" : "Edge";
   const labels = {
     unbound: ["尚未登录七月账号", `点击登录，在打开的专用 ${browserLabel} 窗口中完成扫码。`],
@@ -185,11 +193,16 @@ function renderSession() {
   el("syncBinding").hidden = !session.session_sync_available;
   el("cancelBinding").hidden = !pendingSessionStatuses.has(session.status);
   if (pendingSessionStatuses.has(session.status)) startSessionPolling(); else stopSessionPolling();
+  if (/EGRESS_/.test(String(session.last_error || ""))) showSessionFailure(session.last_error);
 }
 
 async function loadSession() {
   const response = await fetch("/api/session");
-  if (!response.ok) throw new Error("读取账号连接状态失败");
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({}));
+    showSessionFailure(failure.error_code || failure.detail || "读取账号连接状态失败");
+    return;
+  }
   state.session = await response.json();
   renderSession();
 }
@@ -576,8 +589,8 @@ async function sessionAction(action) {
     if (action === "confirm" || action === "sync") {
       await Promise.all([loadDelivery(), loadSession()]);
     }
-  } catch (error) { el("sessionTitle").textContent = "账号登录未完成"; el("sessionMessage").textContent = error.message; }
-  finally { buttons.forEach((button) => { button.disabled = false; }); }
+  } catch (error) { showSessionFailure(error.message); }
+  finally { buttons.forEach((button) => { button.disabled = false; }); if (el("sessionTitle").textContent === "业务出口连接异常") el("startBinding").disabled = true; }
 }
 
 async function loadProducts() {

@@ -31,10 +31,11 @@ def test_page_and_status(web):
 @pytest.mark.parametrize('headers', [{}, {'Origin': 'https://evil.invalid'},
     {'Origin': 'http://127.0.0.1:18768', 'X-Viewer-Token': 'bad'},
     {'Host': 'evil.invalid', 'X-Viewer-Token': viewer.TOKEN}])
-def test_reject_unauthorized(web, headers):
+@pytest.mark.parametrize("path", ["/connect", "/recover"])
+def test_reject_unauthorized(web, headers, path):
     instance, _, replies = web
     instance.headers.update(headers)
-    instance.path = '/connect'
+    instance.path = path
     instance.do_POST()
     assert replies[-1][0] == 403
 
@@ -92,3 +93,45 @@ def test_fixed_safe_ssh():
     assert 'StrictHostKeyChecking=yes' in viewer.SSH
     assert '127.0.0.1:18767:127.0.0.1:6080' in viewer.SSH
     assert not any('9222' in a or 'restart' in a or 'systemctl' in a for a in viewer.SSH)
+
+
+def test_recovery_demo_no_ssh(monkeypatch):
+    monkeypatch.setattr(viewer.subprocess, 'run', lambda *a, **k: pytest.fail('no SSH in demo'))
+    recovery = viewer.Recovery(demo=True)
+    recovery._run()
+    assert recovery.status()['code'] == 'EGRESS_READY'
+    assert recovery.status()['busy'] is False
+
+
+def test_recovery_failure_redacted(monkeypatch):
+    def fail(*a, **k): raise RuntimeError('private credential must not leak')
+    monkeypatch.setattr(viewer.subprocess, 'run', fail)
+    recovery = viewer.Recovery()
+    recovery._run()
+    assert recovery.status()['code'] == 'CHECK_FAILED'
+    assert 'private credential' not in str(recovery.status())
+
+
+def test_recovery_duplicate_and_cooldown(monkeypatch):
+    recovery=viewer.Recovery();recovery.busy=True
+    monkeypatch.setattr(viewer.threading, 'Thread', lambda *a, **k: pytest.fail('must not spawn'))
+    recovery.start()
+    recovery.busy=False;recovery.last_attempt=viewer.time.monotonic()
+    recovery.start()
+    assert recovery.status()['code']=='COOLDOWN'
+
+
+def test_recovery_fixed_command():
+    assert viewer.RECOVER_SSH[-1] == 'sudo -n /usr/bin/python3 -I /usr/local/lib/xianyu-egress/recover_egress.py'
+    assert viewer.RECOVER_SSH[-2] == 'xianyu-cloud'
+    assert 'StrictHostKeyChecking=yes' in viewer.RECOVER_SSH
+
+
+def test_recovery_route_authorized(web, monkeypatch):
+    instance, _, replies=web
+    called=[]
+    monkeypatch.setattr(viewer.Recovery,'start',lambda self:called.append(True))
+    instance.path='/recover'
+    instance.headers.update({'Origin':viewer.URL,'X-Viewer-Token':viewer.TOKEN})
+    instance.do_POST()
+    assert replies[-1][0]==202 and called==[True]

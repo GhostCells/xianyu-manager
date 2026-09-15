@@ -101,6 +101,68 @@ class Tunnel:
                 self.connecting = False
 
 
+RECOVER_SSH = ['/usr/bin/ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+               '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1', 'xianyu-cloud',
+               'sudo -n /usr/bin/python3 -I /usr/local/lib/xianyu-egress/recover_egress.py']
+RECOVERY_MESSAGES = {
+    'EGRESS_READY': '出口已恢复。后台将按原设置重连；请刷新后台核对订单监听与AI客服，若仍要求验证请打开云端画面处理。',
+    'ALREADY_READY': '出口已经正常，无需重启。若仍掉线，请查看云端画面，并核对后台消息连接。',
+    'APPROVAL_REQUIRED': '原出口授权已失效或不适用，需要人工复核。没有修改授权。',
+    'EXPLICIT_REVIEW_REQUIRED': '出口存在人工审核锁定，需要人工复核；没有解除锁定。',
+    'MANUAL_REVIEW_REQUIRED': '当前不是可自动恢复的临时网络故障，需要人工检查。',
+    'PUBLIC_ADDRESS_REVIEW_REQUIRED': '出口公网地址与原授权不一致，需要人工复核。',
+    'WRONG_EXIT_NODE': '当前出口节点与原授权不一致，需要人工检查。',
+    'RULESET_CHANGED': '出口保护规则发生变化，需要人工复核。',
+    'APPROVAL_CHANGED': '检查期间授权发生变化，请停止并人工检查。',
+    'UPDATER_BUSY': '更新器或另一恢复任务正在处理，请稍后刷新后台查看。',
+    'COOLDOWN': '仍在60秒冷却期内，请稍后再试。',
+    'RECOVERY_NOT_READY': '更新器已尝试启动，但出口尚未持续稳定，请检查后台；不要连续重试。',
+    'CHECK_FAILED': '出口检查未通过或连接超时，未确认恢复。请检查Tailscale或联系维护。',
+}
+
+
+class Recovery:
+    def __init__(self, demo=False):
+        self.lock = threading.Lock()
+        self.busy = False
+        self.last_attempt = float('-inf')
+        self.message = '检查原授权出口；仅恢复临时网络故障，不重启Chrome、不补发历史订单。'
+        self.code = 'IDLE'
+        self.demo = demo
+
+    def status(self):
+        with self.lock:
+            return {'busy': self.busy, 'code': self.code, 'message': self.message}
+
+    def start(self):
+        with self.lock:
+            if self.busy:
+                return
+            if time.monotonic() - self.last_attempt < 60:
+                self.code = 'COOLDOWN'
+                self.message = RECOVERY_MESSAGES[self.code]
+                return
+            self.last_attempt = time.monotonic()
+            self.busy = True
+            self.code = 'CHECKING'
+            self.message = '正在核验原授权出口并等待稳定，通常约一分钟，最多三分钟。'
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        try:
+            if self.demo:
+                code = 'EGRESS_READY'
+            else:
+                result = subprocess.run(RECOVER_SSH, stdin=subprocess.DEVNULL, capture_output=True,
+                                        text=True, timeout=180, check=True)
+                code = json.loads(result.stdout).get('code', 'CHECK_FAILED')
+            message = RECOVERY_MESSAGES.get(code, '出口安全检查未通过，需要人工检查；没有更改授权或保护规则。')
+        except Exception:
+            code, message = 'CHECK_FAILED', RECOVERY_MESSAGES['CHECK_FAILED']
+        with self.lock:
+            self.code, self.message, self.busy = code, message, False
+
+
 HTML = '''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>闲鱼云端画面 · 连接助手</title>
 <style>
@@ -121,10 +183,14 @@ small{display:block;color:#66776f;margin-top:22px}#demo{color:#9a5b00} @media(ma
 <small>如提示密码，请输入原noVNC密码，不是闲鱼密码或邮箱授权码。<br>
 仅恢复图形隧道；不重启Chrome、不清Cookie、不修改发货配置。关闭此网页不会关闭云端业务。</small>
 <details><summary>无法连接时怎么办？</summary><p>确认Mac已联网、Tailscale已连接。首次SSH连接或密钥需要解锁时，在终端运行 <code>ssh xianyu-cloud</code>，完成后退出再重试。不要在此网页输入任何密码。</p></details>
+<hr><h2>业务连接恢复</h2><p>后台显示出口异常时，先检查并恢复出口；图形隧道与业务连接分别处理。</p>
+<button id="recover">检查并恢复业务连接</button><p id="recoveryStatus" role="status" aria-live="polite">尚未检查出口。</p>
+<small>只复核原授权出口并恢复临时故障更新器。扫码、验证码、出口变化或人工审核锁定需要本人或维护处理。</small>
 </main><script>
 const button=document.querySelector('#connect'),link=document.querySelector('#open');
 async function update(){try{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error();const s=await r.json();
 document.querySelector('#status').textContent=s.connecting?'连接中…':s.ready?'图形入口已连通':'图形入口未连接';
+document.querySelector('#recoveryStatus').textContent=s.recovery.message;document.querySelector('#recover').disabled=s.recovery.busy;
 document.querySelector('#detail').textContent=s.message;button.disabled=s.connecting;button.textContent=s.ready?'检查 / 重新连接':'连接云端画面';
 link.setAttribute('aria-disabled',String(!s.ready));link.tabIndex=s.ready?0:-1;
 document.querySelector('#demo').textContent=s.demo?'演示模式：不连接服务器':'';
@@ -132,11 +198,16 @@ document.querySelector('#demo').textContent=s.demo?'演示模式：不连接服�
 button.addEventListener('click',async()=>{button.disabled=true;document.querySelector('#status').textContent='连接中…';
 try{const r=await fetch('/connect',{method:'POST',headers:{'X-Viewer-Token':'__TOKEN__'}});if(!r.ok)throw Error();}
 catch(e){document.querySelector('#detail').textContent='启动请求失败，请重新打开本机助手。';}await update();});
+document.querySelector('#recover').addEventListener('click',async()=>{
+const b=document.querySelector('#recover');b.disabled=true;
+try{const r=await fetch('/recover',{method:'POST',headers:{'X-Viewer-Token':'__TOKEN__'}});if(!r.ok)throw Error();await update();}
+catch(e){document.querySelector('#recoveryStatus').textContent='恢复请求失败，请重新载入助手后重试。';b.disabled=false;}});
 async function poll(){await update();setTimeout(poll,3000)}poll();
 </script></html>'''
 
 
 def handler(tunnel):
+    recovery = Recovery(demo=tunnel.demo)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args): pass
 
@@ -160,13 +231,16 @@ def handler(tunnel):
             if self.path == '/':
                 return self.reply(200, HTML.replace('__TOKEN__', TOKEN).encode(), 'text/html; charset=utf-8')
             if self.path == '/status':
-                return self.reply(200, tunnel.status())
+                return self.reply(200, {**tunnel.status(), 'recovery': recovery.status()})
             self.reply(404, {})
 
         def do_POST(self):
             if (not self.valid_host() or self.headers.get('Origin') != URL
                     or not secrets.compare_digest(self.headers.get('X-Viewer-Token', ''), TOKEN)):
                 return self.reply(403, {})
+            if self.path == '/recover':
+                recovery.start()
+                return self.reply(202, {'started': True})
             if self.path != '/connect':
                 return self.reply(404, {})
             tunnel.connect()
