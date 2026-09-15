@@ -200,7 +200,7 @@ async function loadSession() {
   const response = await fetch("/api/session");
   if (!response.ok) {
     const failure = await response.json().catch(() => ({}));
-    showSessionFailure(failure.detail || failure.error_code || "读取账号连接状态失败");
+    showSessionFailure(state.egressBlocked ? "EGRESS_BLOCKED_REVIEW_REQUIRED" : (failure.detail || failure.error_code || "读取账号连接状态失败"));
     return;
   }
   state.session = await response.json();
@@ -1043,6 +1043,7 @@ async function initializePage() {
   const response = await fetch("/api/health");
   if (!response.ok) throw new Error("读取 API 状态失败");
   const health = await response.json();
+  state.egressBlocked = health.egress?.ready === false;
   state.catalogDelivery = health.catalog_delivery === true;
   state.prepareMode = health.mode === "prepare";
   state.runtimeAccountId = health.runtime_account_id;
