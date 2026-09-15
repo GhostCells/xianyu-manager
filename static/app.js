@@ -200,7 +200,7 @@ async function loadSession() {
   const response = await fetch("/api/session");
   if (!response.ok) {
     const failure = await response.json().catch(() => ({}));
-    showSessionFailure(failure.error_code || failure.detail || "读取账号连接状态失败");
+    showSessionFailure(failure.detail || failure.error_code || "读取账号连接状态失败");
     return;
   }
   state.session = await response.json();
