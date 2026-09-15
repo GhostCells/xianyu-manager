@@ -29,3 +29,7 @@ Requests are bound to literal loopback host with Host validation and origin/toke
 checks for mutations. No configurable commands or destinations are accepted.
 Rollback requires stopping only this helper and its own SSH child; it makes no
 server-side configuration changes.
+
+Readiness probes allow up to 8 seconds for a noVNC HTTP response over the private
+tunnel. A connection attempt remains bounded (approximately 40 seconds including
+the final probe); a slow response must not be mistaken for a dead tunnel.

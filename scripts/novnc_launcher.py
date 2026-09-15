@@ -27,7 +27,7 @@ SSH = ['/usr/bin/ssh', '-N', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyCh
 
 def page_ready():
     try:
-        with build_opener(ProxyHandler({})).open(VIEW, timeout=2) as response:
+        with build_opener(ProxyHandler({})).open(VIEW, timeout=8) as response:
             body = response.read(65536)
             return response.status == 200 and b'noVNC' in body
     except Exception:
@@ -60,7 +60,7 @@ class Tunnel:
             if self.connecting:
                 return
             self.connecting = True
-            self.message = '正在连接，最多约30秒，请勿重复点击。'
+            self.message = '正在连接，最多约40秒，请勿重复点击。'
         threading.Thread(target=self._connect, daemon=True).start()
 
     def _connect(self):
