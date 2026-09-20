@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 import signal
 import sys
+import threading
+
+from xianyu_manager.chrome_watchdog import watch_browser
 
 from xianyu_manager.browser_launch import sandbox_options
 from xianyu_manager.profile_lock import ProfileOwnerLock
@@ -38,6 +41,15 @@ async def own_browser():
                 executable_path=str(EXECUTABLE), headless=False, no_viewport=True,
                 args=['--start-maximized', '--no-first-run', '--no-default-browser-check',
                       '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=9222'])
+            crashed = threading.Event()
+            def track_page(page):
+                page.on('crash', lambda *_: crashed.set())
+            for existing in context.pages:
+                track_page(existing)
+            context.on('page', track_page)
+            # A separate thread survives a dead Playwright driver/event loop.
+            # Hard exit deliberately delegates full process-group cleanup to systemd.
+            threading.Thread(target=watch_browser, args=(crashed,), daemon=True).start()
             context.on('close', lambda _: stop.set())
             try:
                 page = context.pages[0] if context.pages else await context.new_page()
